@@ -1876,8 +1876,8 @@ Create a `.env.local` file in the project root (Cursor can do this in the setup 
 # Sharesight OAuth — Development (localhost:3000)
 SHARESIGHT_CLIENT_ID_DEV=your_dev_client_id_here
 SHARESIGHT_CLIENT_SECRET_DEV=your_dev_client_secret_here
-SHARESIGHT_PORTFOLIO_UUID_CORE=your_core_portfolio_uuid
-SHARESIGHT_PORTFOLIO_UUID_SATELLITE=your_satellite_portfolio_uuid
+VITE_SHARESIGHT_PORTFOLIO_UUID_CORE=your_core_portfolio_uuid
+VITE_SHARESIGHT_PORTFOLIO_UUID_SATELLITE=your_satellite_portfolio_uuid
 
 # Sharesight OAuth — Production (Vercel)
 SHARESIGHT_CLIENT_ID_PROD=your_prod_client_id_here
@@ -1910,8 +1910,8 @@ After you link your GitHub repository to Vercel:
 |---|---|---|
 | `SHARESIGHT_CLIENT_ID_PROD` | Your Prod Sharesight client ID | Production |
 | `SHARESIGHT_CLIENT_SECRET_PROD` | Your Prod Sharesight client secret | Production |
-| `SHARESIGHT_PORTFOLIO_UUID_CORE` | Your Core portfolio UUID | Production |
-| `SHARESIGHT_PORTFOLIO_UUID_SATELLITE` | Your Satellite portfolio UUID | Production |
+| `VITE_SHARESIGHT_PORTFOLIO_UUID_CORE` | Your Core portfolio UUID | Production |
+| `VITE_SHARESIGHT_PORTFOLIO_UUID_SATELLITE` | Your Satellite portfolio UUID | Production |
 | `ANTHROPIC_API_KEY` | Your Anthropic API key | Production |
 | `GEMINI_API_KEY` | Your Gemini API key | Production |
 | `FMP_API_KEY` | Your FMP API key | Production |

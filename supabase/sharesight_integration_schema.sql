@@ -256,7 +256,7 @@ create table if not exists public.sharesight_cash_balances (
   portfolio_external_id text not null,
   account_key text not null,
   label text,
-  currency text,
+  currency text not null default '',
   balance numeric,
 
   raw jsonb not null default '{}'::jsonb,
@@ -268,13 +268,7 @@ create table if not exists public.sharesight_cash_balances (
 );
 
 create unique index if not exists sharesight_cash_balances_natural_key
-  on public.sharesight_cash_balances (
-    user_id,
-    portfolio_role,
-    portfolio_external_id,
-    account_key,
-    coalesce(currency, '')
-  );
+  on public.sharesight_cash_balances (user_id, portfolio_role, portfolio_external_id, account_key, currency);
 
 create index if not exists sharesight_cash_balances_user_idx on public.sharesight_cash_balances (user_id);
 
