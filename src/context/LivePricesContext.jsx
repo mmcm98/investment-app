@@ -14,6 +14,7 @@ import { anyExchangeNeedsLiveQuotes, isLivePriceWindowActiveForExchange } from '
 import { resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
+import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
 
 /** @typedef {import('@supabase/supabase-js').SupabaseClient} SupabaseClient */
 
@@ -48,6 +49,12 @@ import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClo
  *   sharesight_market_value: number|null
  *   display_native: number|null
  *   display_aud: number|null
+ *   quantity: number|null
+ *   quote_currency: string
+ *   is_cash_like: boolean
+ *   holding_value_aud: number|null
+ *   unrealised_gain_aud: number|null
+ *   day_move_value_aud: number|null
  * }} MergedQuoteRow */
 
 /** @type {React.Context<{
@@ -574,6 +581,46 @@ export function LivePricesProvider({ children }) {
               ? displayNative
               : null
 
+      const qty = numOrNull(h.quantity)
+      const hk = /** @type {Record<string, unknown>} */ (h)
+      const cashLike = isCashLikeHolding({
+        instrument_symbol: h.instrument_symbol,
+        instrument_name: h.instrument_name,
+      })
+
+      let holdingValueAud =
+        qty != null && displayAud != null && Number.isFinite(qty) && Number.isFinite(displayAud) ? qty * displayAud : null
+
+      if (holdingValueAud == null && mv != null && currencyIso(h.currency) === 'AUD') {
+        holdingValueAud = mv
+      }
+
+      /** @type {number|null} */
+      let unrealisedGainAud = null
+
+      const uglRaw = Reflect.get(hk, 'unrealized_gain_loss')
+      const ugl =
+        uglRaw != null && Number.isFinite(Number(uglRaw))
+          ? Number(uglRaw)
+          : Number.parseFloat(`${uglRaw ?? ''}`)
+
+      if (Number.isFinite(ugl) && currencyIso(h.currency) === 'AUD') unrealisedGainAud = ugl
+
+      /** @type {number|null} */
+      let dayMoveAud = null
+
+      if (qty != null && last != null && prev != null && Number.isFinite(qty)) {
+        const nativeDelta = last - prev
+        const perUnitAud =
+          quoteCur === 'AUD'
+            ? 1
+            : fxByCurrency[quoteCur]?.aud_per_unit != null && Number.isFinite(fxByCurrency[quoteCur].aud_per_unit)
+              ? fxByCurrency[quoteCur].aud_per_unit
+              : null
+
+        if (perUnitAud != null && Number.isFinite(nativeDelta)) dayMoveAud = qty * nativeDelta * perUnitAud
+      }
+
       return {
         yahoo_symbol: id.yahooSymbol,
         fmp_symbol: id.fmpSymbol,
@@ -592,6 +639,12 @@ export function LivePricesProvider({ children }) {
         sharesight_market_value: mv,
         display_native: displayNative,
         display_aud: displayAud,
+        quantity: qty,
+        quote_currency: quoteCur,
+        is_cash_like: cashLike,
+        holding_value_aud: holdingValueAud,
+        unrealised_gain_aud: unrealisedGainAud,
+        day_move_value_aud: dayMoveAud,
       }
     })
   }, [holdingRows, snapshotByKey, fxByCurrency])

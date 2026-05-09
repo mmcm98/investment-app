@@ -34,3 +34,11 @@ export async function postMarketBatch(payload) {
 export async function postTickerSearch(query, limit = 15) {
   return postMarketBatch({ op: 'tickerSearch', query, limit })
 }
+
+/**
+ * @param {string} symbol Yahoo symbol e.g. VGS.AX
+ * @param {'1M'|'3M'|'6M'|'1Y'|'2Y'|'ALL'} [preset]
+ */
+export async function postChartHistory(symbol, preset = '1Y') {
+  return postMarketBatch({ op: 'chartHistory', symbol, preset })
+}

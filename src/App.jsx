@@ -7,6 +7,9 @@ import { OAuthCallback } from './routes/OAuthCallback.jsx'
 import { AuthPage } from './routes/AuthPage.jsx'
 import { SatellitePortfolio } from './routes/SatellitePortfolio.jsx'
 import { PositionDetail } from './routes/PositionDetail.jsx'
+import { CorePortfolio } from './routes/CorePortfolio.jsx'
+import { WatchlistPage } from './routes/WatchlistPage.jsx'
+import { SettingsPage } from './routes/SettingsPage.jsx'
 
 function AuthLoading() {
   return (
@@ -62,9 +65,15 @@ function AppRoutes() {
       <Route path="/" element={ss.userPresent ? <AppShell /> : <Navigate to="/login" replace />}>
         <Route index element={<DashboardHome />} />
 
+        <Route path="core" element={<CorePortfolio />} />
+
         <Route path="satellite" element={<SatellitePortfolio />} />
 
         <Route path="satellite/position/:id" element={<PositionDetail />} />
+
+        <Route path="watchlist" element={<WatchlistPage />} />
+
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to={ss.userPresent ? '/' : '/login'} replace />} />

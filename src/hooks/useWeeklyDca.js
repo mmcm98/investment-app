@@ -14,6 +14,8 @@ export function useWeeklyDca() {
   const { supabase, userPresent, supabaseConfigured } = useSharesightIntegration()
   const { mergedRows } = useLivePrices()
 
+  const [reloadKey, setReloadKey] = useState(0)
+
   const [settingsRow, setSettingsRow] = useState(/** @type {Record<string, unknown> | null} */ (null))
   const [coreRows, setCoreRows] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [loadError, setLoadError] = useState(/** @type {string | null} */ (null))
@@ -63,7 +65,7 @@ export function useWeeklyDca() {
     return () => {
       cancelled = true
     }
-  }, [supabase, userPresent])
+  }, [supabase, userPresent, reloadKey])
 
   const computed = useMemo(() => {
     const base = settingsRow ? numOr(settingsRow.weekly_dca_base_aud, DEFAULT_BASE_WEEKLY_AUD) : DEFAULT_BASE_WEEKLY_AUD
@@ -91,6 +93,7 @@ export function useWeeklyDca() {
     userPresent,
     loadError,
     hasSettingsRow: Boolean(settingsRow),
+    reloadWeeklyDca: () => setReloadKey((n) => n + 1),
     ...computed,
   }
 }

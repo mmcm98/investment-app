@@ -300,6 +300,83 @@ export async function athOp(body) {
 }
 
 /**
+ * @param {{ symbol?: unknown, preset?: unknown }} body
+ *
+ * preset: `1M` | `3M` | `6M` | `1Y` | `2Y` | `ALL`
+ */
+export async function chartHistoryOp(body) {
+  const sym = `${body.symbol ?? ''}`.trim()
+
+  if (!sym) return { ok: false, error: 'symbol_required', points: [] }
+
+  const preset = `${typeof body.preset === 'string' ? body.preset : ''}`.trim().toUpperCase() || '1Y'
+
+  /** @type {Date} */
+  let period1
+
+  if (preset === 'ALL') {
+    period1 = new Date('1990-01-01')
+  } else {
+    period1 = new Date()
+    const map = /** @type {Record<string, number>} */ ({
+      '1M': -1,
+      '3M': -3,
+      '6M': -6,
+      '1Y': -12,
+      '2Y': -24,
+    })
+
+    const months = map[preset] ?? -12
+
+    period1.setMonth(period1.getMonth() + months)
+  }
+
+  try {
+    const chart = /** @type {{ quotes?: unknown[] }} */ (
+      await yahooFinance.chart(sym, {
+        period1,
+        interval: '1d',
+      })
+    )
+
+    const quotesArr = Array.isArray(chart.quotes) ? chart.quotes : []
+
+    /** @type {{ t: string, close: number }[]} */
+    const points = []
+
+    for (const row of quotesArr) {
+      if (!row || typeof row !== 'object') continue
+
+      const closeRaw = Reflect.get(row, 'close')
+
+      const closeNum =
+        typeof closeRaw === 'number' && Number.isFinite(closeRaw)
+          ? closeRaw
+          : Number.parseFloat(`${closeRaw ?? ''}`)
+
+      if (!Number.isFinite(closeNum)) continue
+
+      const d = Reflect.get(row, 'date')
+
+      /** @type {Date | null} */
+      let dateObj =
+        d instanceof Date ? d : typeof d === 'number' ? new Date(d * 1000) : typeof d === 'string' ? new Date(d) : null
+
+      if (!dateObj || !Number.isFinite(dateObj.getTime())) continue
+
+      points.push({
+        t: dateObj.toISOString().slice(0, 10),
+        close: closeNum,
+      })
+    }
+
+    return { ok: true, symbol: sym, preset: preset === 'ALL' ? 'ALL' : preset, points }
+  } catch (e) {
+    return { ok: false, error: `${e}`, symbol: sym, points: [] }
+  }
+}
+
+/**
  * FMP ticker / company search (user types → dropdown lock-in symbol + exchange).
  *
  * @param {{ query?: string|null, limit?: number }} body
@@ -390,6 +467,8 @@ export async function dispatchMarketRpc(body, env) {
   if (op === 'ath') return await athOp(body)
 
   if (op === 'tickerSearch') return await tickerSearchOp(body, env)
+
+  if (op === 'chartHistory') return await chartHistoryOp(body)
 
   return { ok: false, error: `unknown_op:${op}` }
 }

@@ -71,7 +71,7 @@ export function PositionDetail() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 p-10 text-[#F0F0F8]">
+    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-10 pb-24 text-[#F0F0F8] lg:pb-10 lg:px-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <Link className="font-mono text-xs text-[#79CBFF]" to="/satellite">

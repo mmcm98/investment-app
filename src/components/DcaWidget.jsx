@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useWeeklyDca } from '../hooks/useWeeklyDca.js'
 
 /** @param {number | null | undefined} n */
@@ -17,20 +19,116 @@ function fmtPct(n) {
   return `${n.toFixed(2)}%`
 }
 
-export function DcaWidget() {
+/** @typedef {{ allowBaseEdit?: boolean, density?: 'default'|'dashboard' }} DcaOpts */
+
+/** @param {DcaOpts} [opts] */
+
+export function DcaWidget(opts = {}) {
+  const allowBaseEdit = Boolean(opts.allowBaseEdit)
+
+  const density = opts.density ?? 'default'
+
+  const supa = useSharesightIntegration()
+
   const dca = useWeeklyDca()
+
+  /** @type {[string|null, import('react').Dispatch<import('react').SetStateAction<string|null>>]} */
+
+  const [manualBaseDraft, setManualBaseDraft] = useState(null)
+
+  const [baseErr, setBaseErr] = useState(/** @type {string|null} */ (null))
+
+  const [busy, setBusy] = useState(false)
+
+  const baseDraft = manualBaseDraft ?? dca.baseWeeklyAud.toFixed(2)
+
+  const bindBaseDraft = /** @type {import('react').ChangeEventHandler<HTMLInputElement>} */ ((e) => {
+    setManualBaseDraft(e.target.value)
+  })
 
   if (!dca.supabaseConfigured || !dca.userPresent) return null
 
+  const mt = density === 'dashboard' ? 'mt-0' : 'mt-8'
+
   return (
-    <div className="mt-8 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#0A0A0F] px-5 py-4">
+    <div className={`${mt} rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]`}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Weekly DCA (core)</p>
           <p className="mt-2 text-xs text-[#9090A8]">
-            Base <span className="font-mono text-[#F0F0F8]">{fmtAud(dca.baseWeeklyAud)}</span> · tier schedules from
-            Supabase (Standard / GHHF / Custom) · 0× within 1.5% of ATH forfeits that sleeve (no redistribution).
+            Weekly base&nbsp;
+            {allowBaseEdit ? (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <input
+                  className="w-32 rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 font-mono text-xs text-[#F0F0F8]"
+                  value={baseDraft}
+                  onChange={bindBaseDraft}
+                  inputMode="decimal"
+                />
+
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="rounded border border-[rgba(77,184,255,0.45)] px-2 py-1 font-mono text-[10px] text-[#79CBFF] disabled:opacity-40"
+                  onClick={async () => {
+                    setBaseErr(null)
+
+                    const n = Number.parseFloat(baseDraft.replace(/,/g, ''))
+
+                    if (!Number.isFinite(n) || n < 0 || n > 1_000_000) {
+                      setBaseErr('Enter a plausible AUD amount.')
+
+                      return
+                    }
+
+                    if (!supa.supabase) return
+
+                    setBusy(true)
+
+                    try {
+                      const { data: ud } = await supa.supabase.auth.getUser()
+
+                      const uid = ud.user?.id
+
+                      if (!uid) throw new Error('Not signed in.')
+
+                      const { error } = await supa.supabase
+                        .from('user_settings')
+                        .upsert(
+                          {
+                            user_id: uid,
+                            weekly_dca_base_aud: n,
+                            updated_at: new Date().toISOString(),
+                          },
+
+                          { onConflict: 'user_id' },
+
+                        )
+
+                      if (error) throw error
+
+                      setManualBaseDraft(null)
+
+                      dca.reloadWeeklyDca()
+                    } catch (e) {
+                      setBaseErr(e instanceof Error ? e.message : String(e))
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  Save base
+                </button>
+              </span>
+
+            ) : (
+              <span className="font-mono text-[#F0F0F8]">{fmtAud(dca.baseWeeklyAud)}</span>
+            )}
+            {' '}
+            · tier schedules via Supabase (Standard / GHHF / Custom) · 0× within 1.5% of ATH forfeits that sleeve (no redistribution).
           </p>
+
+          {baseErr ? <p className="mt-2 font-mono text-[11px] text-[#EF4444]">{baseErr}</p> : null}
         </div>
         <div className="text-right">
           <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Total this week</p>
@@ -99,7 +197,9 @@ export function DcaWidget() {
                   <td className="py-3 pr-3 text-right font-mono text-xs text-[#79CBFF]">{fmtPct(r.distancePct)}</td>
                   <td className="py-3 pr-3 text-xs text-[#C4C4D4]">{r.tierBandLabel}</td>
                   <td className="py-3 pr-3 font-mono text-xs text-[#F0F0F8]">{r.multiplierLabel}</td>
-                  <td className="py-3 pr-3 text-right font-mono text-[#4DB8FF]">{fmtAud(r.contributionAud)}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-[#4DB8FF]">
+                    {r.multiplier === 0 ? fmtAud(0) : fmtAud(r.contributionAud)}
+                  </td>
                   <td className="py-3 pr-3 text-right font-mono text-[10px] text-[#505068]">
                     {r.trueExposurePct != null ? `${r.trueExposurePct.toFixed(2)}%` : '—'}
                     <span className="mt-0.5 block font-mono text-[9px] text-[#404050]">×{r.gearingFactor}</span>
