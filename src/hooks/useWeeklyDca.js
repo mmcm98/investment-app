@@ -43,7 +43,9 @@ export function useWeeklyDca() {
           supabase.from('user_settings').select('*').eq('user_id', uid).maybeSingle(),
           supabase
             .from('core_etfs')
-            .select('ticker,target_weight_pct,tier_schedule_kind,custom_tier_schedule,gearing_multiple,sort_order,archived')
+            .select(
+              'ticker,name,provider_page_url,target_weight_pct,tier_schedule_kind,custom_tier_schedule,gearing_multiple,sort_order,archived',
+            )
             .eq('user_id', uid)
             .eq('archived', false)
             .order('sort_order', { ascending: true })
@@ -73,6 +75,8 @@ export function useWeeklyDca() {
 
     const coreEtfs = coreRows.map((r) => ({
       ticker: `${r.ticker ?? ''}`,
+      name: typeof r.name === 'string' ? r.name : null,
+      provider_page_url: typeof r.provider_page_url === 'string' ? r.provider_page_url : null,
       target_weight_pct: numOr(r.target_weight_pct, 0),
       tier_schedule_kind: `${r.tier_schedule_kind ?? 'standard'}`,
       custom_tier_schedule: r.custom_tier_schedule,

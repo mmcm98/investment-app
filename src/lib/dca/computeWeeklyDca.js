@@ -17,6 +17,8 @@ const DEFAULT_GEARING = 1.5
  *   custom_tier_schedule: unknown
  *   gearing_multiple: number | null
  *   sort_order?: number | null
+ *   name?: string | null
+ *   provider_page_url?: string | null
  * }} CoreEtfRow
  */
 
@@ -101,6 +103,9 @@ export function findCoreQuoteForTicker(mergedRows, ticker) {
  *   gearingFactor: number
  *   trueExposurePct: number | null
  *   quoteMatched: boolean
+ *   displayName: string | null
+ *   providerPageUrl: string | null
+ *   gearingFromDb: number | null
  * }} DcaEtfComputationRow
  */
 
@@ -154,9 +159,16 @@ export function computeWeeklyDcaRows(p) {
     }
 
     const gRaw = etf.gearing_multiple
-    const gearingFactor = typeof gRaw === 'number' && Number.isFinite(gRaw) && gRaw > 0 ? gRaw : DEFAULT_GEARING
+    const gearingFromDb = typeof gRaw === 'number' && Number.isFinite(gRaw) && gRaw > 0 ? gRaw : null
+
+    const gearingFactor = gearingFromDb ?? DEFAULT_GEARING
+
     const trueExposurePct =
       alloc > 0 && Number.isFinite(gearingFactor) ? (alloc / 100) * gearingFactor * 100 : null
+
+    const dn = etf.name
+
+    const pu = etf.provider_page_url
 
     rows.push({
       ticker: etf.ticker.trim(),
@@ -173,6 +185,9 @@ export function computeWeeklyDcaRows(p) {
       gearingFactor,
       trueExposurePct,
       quoteMatched: Boolean(quote),
+      displayName: typeof dn === 'string' && dn.trim() ? dn.trim() : null,
+      providerPageUrl: typeof pu === 'string' && pu.trim() ? pu.trim() : null,
+      gearingFromDb,
     })
   }
 
