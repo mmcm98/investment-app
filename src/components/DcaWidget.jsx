@@ -1,0 +1,122 @@
+import { useWeeklyDca } from '../hooks/useWeeklyDca.js'
+
+/** @param {number | null | undefined} n */
+function fmtAud(n) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toLocaleString('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+/** @param {number | null | undefined} n */
+function fmtPct(n) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return `${n.toFixed(2)}%`
+}
+
+export function DcaWidget() {
+  const dca = useWeeklyDca()
+
+  if (!dca.supabaseConfigured || !dca.userPresent) return null
+
+  return (
+    <div className="mt-8 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#0A0A0F] px-5 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-4">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Weekly DCA (core)</p>
+          <p className="mt-2 text-xs text-[#9090A8]">
+            Base <span className="font-mono text-[#F0F0F8]">{fmtAud(dca.baseWeeklyAud)}</span> · tier schedules from
+            Supabase (Standard / GHHF / Custom) · 0× within 1.5% of ATH forfeits that sleeve (no redistribution).
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Total this week</p>
+          <p className="mt-1 font-mono text-lg text-[#4DB8FF]">{fmtAud(dca.totalWeekly)}</p>
+        </div>
+      </div>
+
+      {dca.loadError ? (
+        <p className="mt-4 font-mono text-xs text-[#EF4444]">{dca.loadError}</p>
+      ) : null}
+
+      {!dca.hasSettingsRow ? (
+        <p className="mt-4 text-xs text-[#9090A8]">
+          No <span className="font-mono">user_settings</span> row yet — using default base{' '}
+          <span className="font-mono text-[#F0F0F8]">A$350</span> and canonical Standard / GHHF ladders until you persist
+          settings in Supabase.
+        </p>
+      ) : null}
+
+      {Number.isFinite(dca.weightSum) && Math.abs(dca.weightSum - 100) > 0.05 ? (
+        <div className="mt-4 rounded-lg border border-[rgba(245,158,11,0.35)] bg-[rgba(245,158,11,0.08)] px-3 py-2 text-xs text-[#FCD34D]">
+          Active core ETF weights sum to <span className="font-mono">{dca.weightSum.toFixed(2)}%</span> (expected ~100%
+          for allocation-of-core semantics).
+        </div>
+      ) : null}
+
+      <div className="mt-5 overflow-x-auto">
+        <table className="w-full min-w-[960px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-[rgba(255,255,255,0.06)] text-[10px] font-semibold uppercase tracking-wide text-[#505068]">
+              <th className="py-3 pr-3 font-mono">ETF</th>
+              <th className="py-3 pr-3">Schedule</th>
+              <th className="py-3 pr-3 text-right font-mono">Alloc %</th>
+              <th className="py-3 pr-3 text-right font-mono">Price</th>
+              <th className="py-3 pr-3 text-right font-mono">ATH</th>
+              <th className="py-3 pr-3 text-right font-mono">Δ ATH</th>
+              <th className="py-3 pr-3">Tier</th>
+              <th className="py-3 pr-3 font-mono">Mult</th>
+              <th className="py-3 pr-3 text-right font-mono">Contrib.</th>
+              <th className="py-3 pr-3 text-right font-mono" title="allocation × gearing (info only)">
+                True exp. %
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {dca.rows.length === 0 ? (
+              <tr>
+                <td colSpan={10} className="py-6 text-xs text-[#9090A8]">
+                  No active core ETFs in <span className="font-mono">core_etfs</span>. Add rows (non-archived) in Supabase
+                  to drive DCA.
+                </td>
+              </tr>
+            ) : (
+              dca.rows.map((r) => (
+                <tr
+                  key={r.ticker}
+                  className="border-b border-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.02)]"
+                >
+                  <td className="py-3 pr-3 font-mono text-[#F0F0F8]">{r.ticker}</td>
+                  <td className="py-3 pr-3 text-xs capitalize text-[#9090A8]">{r.scheduleLabel}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-xs text-[#9090A8]">
+                    {r.allocationPct.toFixed(2)}%
+                  </td>
+                  <td className="py-3 pr-3 text-right font-mono text-[#F0F0F8]">{fmtAud(r.priceAud)}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-xs text-[#9090A8]">{fmtAud(r.athAud)}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-xs text-[#79CBFF]">{fmtPct(r.distancePct)}</td>
+                  <td className="py-3 pr-3 text-xs text-[#C4C4D4]">{r.tierBandLabel}</td>
+                  <td className="py-3 pr-3 font-mono text-xs text-[#F0F0F8]">{r.multiplierLabel}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-[#4DB8FF]">{fmtAud(r.contributionAud)}</td>
+                  <td className="py-3 pr-3 text-right font-mono text-[10px] text-[#505068]">
+                    {r.trueExposurePct != null ? `${r.trueExposurePct.toFixed(2)}%` : '—'}
+                    <span className="mt-0.5 block font-mono text-[9px] text-[#404050]">×{r.gearingFactor}</span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {dca.rows.some((r) => !r.quoteMatched) ? (
+        <p className="mt-3 text-[10px] text-[#505068]">
+          Some tickers did not match a core holding quote cache row — sync Sharesight and refresh prices after symbols
+          align.
+        </p>
+      ) : null}
+    </div>
+  )
+}

@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { DcaWidget } from '../components/DcaWidget.jsx'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useLivePrices } from '../context/LivePricesContext.jsx'
 
@@ -287,6 +288,8 @@ export function DashboardHome() {
                 </dl>
               </div>
             </div>
+
+            <DcaWidget />
           </>
         ) : (
           <div className="mt-5 rounded-xl border border-[rgba(77,184,255,0.35)] bg-[rgba(77,184,255,0.08)] px-5 py-4">

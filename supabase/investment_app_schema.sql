@@ -39,6 +39,8 @@ create table public.user_settings (
   external_cash_aud numeric(18,2) not null default 0,
   global_api_pause boolean not null default false,
 
+  tier_schedules jsonb,
+
   -- JSON blobs for large configurable structures (tier schedules, UI prefs, etc.)
   preferences jsonb not null default '{}'::jsonb
 );
