@@ -88,10 +88,15 @@ export function useSatellitePortfolio() {
   const [settingsRow, setSettingsRow] = useState(/** @type {Record<string, unknown>|null} */ (null))
   const [scoreRows, setScoreRows] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [loadError, setLoadError] = useState(/** @type {string|null} */ (null))
+  const [satelliteFetching, setSatelliteFetching] = useState(false)
+  const [satelliteHydrated, setSatelliteHydrated] = useState(false)
 
   const reload = useCallback(async () => {
     if (!supabase) return
 
+    setSatelliteFetching(true)
+
+    try {
     const { data: ud } = await supabase.auth.getUser()
     const uid = ud.user?.id
     if (!uid) return
@@ -125,6 +130,10 @@ export function useSatellitePortfolio() {
     setOverrides(/** @type {Record<string, unknown>[]} */ (oRes.data ?? []))
     setSettingsRow(sRes.data ? /** @type {Record<string, unknown>} */ (sRes.data) : null)
     setScoreRows(/** @type {Record<string, unknown>[]} */ (scRes.data ?? []))
+    } finally {
+      setSatelliteFetching(false)
+      setSatelliteHydrated(true)
+    }
   }, [supabase])
 
   useEffect(() => {
@@ -136,6 +145,7 @@ export function useSatellitePortfolio() {
         setSettingsRow(null)
         setScoreRows([])
         setLoadError(null)
+        setSatelliteHydrated(false)
       })
       return undefined
     }
@@ -411,8 +421,14 @@ export function useSatellitePortfolio() {
     [supabase, reload],
   )
 
+  const hasRecoverableSatelliteData = positions.length > 0 || holdings.length > 0
+
   return {
     loadError,
+    satelliteFetching,
+    satelliteHydrated,
+    hasRecoverableSatelliteData,
+
     settingsRow,
     showAudParenthetical: showAudPar,
     setPrefShowAud,

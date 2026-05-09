@@ -26,7 +26,7 @@ export function ScoreRing({ pct, size = 120, stroke = 10, label = 'Overall' }) {
           strokeDasharray={c}
           initial={{ strokeDashoffset: c }}
           animate={{ strokeDashoffset: offset }}
-          transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>

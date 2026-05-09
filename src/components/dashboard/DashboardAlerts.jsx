@@ -222,9 +222,9 @@ export function DashboardAlerts({ positions, mergedRows, latestScoreByPid, dashb
         <motion.div
           key={a.key}
           layout
-          initial={{ opacity: 0, y: 4 }}
+          initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
+          transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
           className="flex flex-wrap items-start gap-3 rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#111118] py-4 pl-5 pr-4"
           style={{ boxShadow: `inset 4px 0 0 0 ${accents[a.tone]}` }}
         >
@@ -245,7 +245,7 @@ export function DashboardAlerts({ positions, mergedRows, latestScoreByPid, dashb
           {a.onDismiss ? (
             <button
               type="button"
-              className="shrink-0 rounded-md border border-[rgba(255,255,255,0.12)] px-2 py-1 font-mono text-[10px] text-[#9090A8] hover:border-[rgba(255,255,255,0.2)]"
+              className="min-h-[44px] shrink-0 touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-[10px] text-[#9090A8] hover:border-[rgba(255,255,255,0.2)]"
               onClick={() => void a.onDismiss?.()}
             >
               Dismiss

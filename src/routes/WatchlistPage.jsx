@@ -4,7 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 
+import { useInvTheme } from '../context/InvThemeContext.jsx'
+
 import { AddTickerCombobox } from '../components/satellite/AddTickerCombobox.jsx'
+
+import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
+
+import { Skeleton } from '../components/ui/Skeleton.jsx'
 
 import { postMarketBatch } from '../lib/market/marketApi.js'
 
@@ -123,6 +129,8 @@ function fmtPct(q, key) {
 export function WatchlistPage() {
   const { supabase, userPresent } = useSharesightIntegration()
 
+  const theme = useInvTheme()
+
   const [rows, setRows] = useState(/** @type {Record<string, unknown>[]} */ ([]))
 
   const [scores, setScores] = useState(/** @type {Record<string, unknown>[]} */ ([]))
@@ -132,6 +140,8 @@ export function WatchlistPage() {
   const [loadError, setLoadError] = useState(/** @type {string|null} */ (null))
 
   const [reloadTok, setReloadTok] = useState(0)
+
+  const [watchlistHydrated, setWatchlistHydrated] = useState(false)
 
   const [flashBusy, setFlashBusy] = useState(/** @type {string|null} */ (null))
 
@@ -156,6 +166,7 @@ export function WatchlistPage() {
         setRows([])
         setScores([])
         setLoadError(null)
+        setWatchlistHydrated(false)
       })
 
       return undefined
@@ -204,6 +215,8 @@ export function WatchlistPage() {
         setScores(/** @type {Record<string, unknown>[]} */ (scRes.data ?? []))
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (!cancelled) setWatchlistHydrated(true)
       }
     })()
 
@@ -559,11 +572,11 @@ export function WatchlistPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-8 pb-28 text-[#F0F0F8] lg:px-8 lg:pb-12">
+    <div className={`mx-auto w-full max-w-[1600px] space-y-6 px-4 py-8 pb-28 lg:px-8 lg:pb-12 ${theme.fg}`}>
       <div className="flex flex-col gap-2">
         <h1 className="text-[22px] font-semibold">Watchlist</h1>
 
-        <p className="max-w-[78ch] text-sm text-[#9090A8]">
+        <p className={`max-w-[78ch] text-sm ${theme.muted}`}>
           Track pre-position ideas with the same FMP combobox as Satellite. When you buy and the holding appears in Sharesight, rows promote
           automatically after sync.
         </p>
@@ -677,7 +690,16 @@ export function WatchlistPage() {
         </label>
       </div>
 
-      {loadError ? <p className="font-mono text-sm text-[#EF4444]">{loadError}</p> : null}
+      {loadError ? (
+        <DataStaleBanner
+          message={loadError}
+          context={
+            sorted.length > 0
+              ? 'Table shows the last synced watchlist + score payloads.'
+              : 'Watchlist refresh failed — try reloading or check Supabase connectivity.'
+          }
+        />
+      ) : null}
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118]">
         <table className="min-w-[1200px] w-full border-collapse text-left text-[11px]">
@@ -706,8 +728,16 @@ export function WatchlistPage() {
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-[rgba(255,255,255,0.03)] font-mono text-[11px]">
-            {sorted.length === 0 ? (
+          <tbody className="divide-y divide-[rgba(255,255,255,0.03)] font-mono text-[11px] tabular-nums">
+            {!watchlistHydrated ? (
+              Array.from({ length: 7 }, (_, i) => (
+                <tr key={`sk-${i}`}>
+                  <td className="px-3 py-3" colSpan={20}>
+                    <Skeleton className="h-8 w-full" />
+                  </td>
+                </tr>
+              ))
+            ) : sorted.length === 0 ? (
               <tr>
                 <td className="px-3 py-6 text-[#505068]" colSpan={20}>
                   Empty watchlist — add a ticker above.

@@ -26,11 +26,14 @@ export function useDashboardData() {
   const [scoreRowsAll, setScoreRowsAll] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [watchlistItems, setWatchlistItems] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [loadError, setLoadError] = useState(/** @type {string|null} */ (null))
+  const [dashboardFetching, setDashboardFetching] = useState(false)
+  const [dashboardHydrated, setDashboardHydrated] = useState(false)
 
   const reload = useCallback(async () => {
     if (!supabase || !userPresent) return
 
     setLoadError(null)
+    setDashboardFetching(true)
 
     try {
       const { data: ud } = await supabase.auth.getUser()
@@ -107,6 +110,9 @@ export function useDashboardData() {
       setScoreRowsAll(/** @type {Record<string, unknown>[]} */ (scores ?? []))
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDashboardFetching(false)
+      setDashboardHydrated(true)
     }
   }, [supabase, userPresent])
 
@@ -122,6 +128,7 @@ export function useDashboardData() {
         setWatchlistItems([])
         setScoreRowsAll([])
         setLoadError(null)
+        setDashboardHydrated(false)
       })
 
       return undefined
@@ -217,12 +224,23 @@ export function useDashboardData() {
   const bookCore = useMemo(() => bookValueTotalsFromHoldingsAud(holdingsAll, 'core'), [holdingsAll])
   const bookSat = useMemo(() => bookValueTotalsFromHoldingsAud(holdingsAll, 'satellite'), [holdingsAll])
 
+  const hasRecoverableDashboardData =
+    Boolean(settingsRow) ||
+    positions.length > 0 ||
+    holdingsAll.length > 0 ||
+    watchlistItems.length > 0 ||
+    cashRows.length > 0
+
   return {
     settingsRow,
     dashboardPrefs,
     persistPrefs,
     reload,
     loadError,
+
+    dashboardFetching,
+    dashboardHydrated,
+    hasRecoverableDashboardData,
 
     holdingsSplit,
     broker,

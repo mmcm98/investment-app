@@ -12,11 +12,23 @@ import { WatchlistPage } from './routes/WatchlistPage.jsx'
 import { WatchlistItemDetail } from './routes/WatchlistItemDetail.jsx'
 import { SettingsPage } from './routes/SettingsPage.jsx'
 
+import { Skeleton } from './components/ui/Skeleton.jsx'
+
 function AuthLoading() {
   return (
-    <div className="min-h-screen bg-[#0A0A0F] px-6 py-14 text-[#F0F0F8]">
+    <div className="inv-shell min-h-screen bg-[#0A0A0F] px-6 py-14 text-[#F0F0F8]">
       <div className="mx-auto w-full max-w-md rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-8 py-8">
-        <p className="text-sm text-[#9090A8]">Checking authentication…</p>
+        <Skeleton className="mx-auto mb-6 h-8 w-[120px]" />
+
+        <Skeleton className="h-4 w-full" />
+
+        <Skeleton className="mt-4 h-4 w-[88%]" />
+
+        <Skeleton className="mt-4 h-4 w-[72%]" />
+
+        <p className="mt-8 text-xs text-[#505068]" role="status">
+          Checking authentication…
+        </p>
       </div>
     </div>
   )

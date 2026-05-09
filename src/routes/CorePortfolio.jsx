@@ -6,9 +6,17 @@ import { useLivePrices } from '../context/LivePricesContext.jsx'
 
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 
+import { useInvTheme } from '../context/InvThemeContext.jsx'
+
 import { useWeeklyDca } from '../hooks/useWeeklyDca.js'
 
 import { actualCoreSleevePct } from '../lib/core/coreActualAllocation.js'
+
+import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
+
+import { MotionCard } from '../components/ui/MotionCard.jsx'
+
+import { Skeleton } from '../components/ui/Skeleton.jsx'
 
 /** @param {number | null | undefined} n */
 
@@ -46,9 +54,11 @@ function Metric({ label, children, mono = true }) {
 export function CorePortfolio() {
   const { userPresent, supabaseConfigured } = useSharesightIntegration()
 
+  const theme = useInvTheme()
+
   const dca = useWeeklyDca()
 
-  const { mergedRows, pricesUpdating, quoteError } = useLivePrices()
+  const { mergedRows, pricesUpdating } = useLivePrices()
 
   const rowsWithActual = useMemo(
     () =>
@@ -62,21 +72,40 @@ export function CorePortfolio() {
 
   if (!supabaseConfigured || !userPresent) {
     return (
-      <div className="mx-auto w-full max-w-[1200px] space-y-4 px-4 py-6 pb-24 text-[#F0F0F8] lg:px-10 lg:pb-10">
+      <div className={`mx-auto w-full max-w-[1200px] space-y-4 px-4 py-6 pb-24 lg:px-10 lg:pb-10 ${theme.fg}`}>
         <h1 className="font-sans text-[22px] font-semibold">Core portfolio</h1>
 
-        <p className="text-sm text-[#9090A8]">Sign in to view your core sleeve.</p>
+        <p className={`text-sm ${theme.muted}`}>Sign in to view your core sleeve.</p>
+      </div>
+    )
+  }
+
+  if (!dca.weeklyDcaHydrated) {
+    return (
+      <div className={`mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 pb-24 lg:px-10 lg:pb-10 ${theme.fg}`}>
+        <Skeleton className="h-8 w-[220px]" />
+
+        <Skeleton className="h-4 max-w-xl" />
+
+        <div className="space-y-4">
+          <Skeleton className="h-[168px] w-full rounded-xl" />
+
+          <Skeleton className="h-[168px] w-full rounded-xl" />
+
+          <Skeleton className="h-[168px] w-full rounded-xl" />
+
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 pb-24 text-[#F0F0F8] lg:px-10 lg:pb-10">
+    <div className={`mx-auto w-full max-w-[1200px] space-y-6 px-4 py-6 pb-24 lg:px-10 lg:pb-10 ${theme.fg}`}>
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-sans text-[22px] font-semibold">Core portfolio</h1>
 
-          <p className="mt-2 max-w-[76ch] text-sm text-[#9090A8]">
+          <p className={`mt-2 max-w-[76ch] text-sm ${theme.muted}`}>
             Active ETFs from <span className="font-mono text-[12px] text-[#79CBFF]">core_etfs</span> with live quotes, ATH distance, DCA
             tiers, and sleeve-level weights from Sharesight core holdings.
 
@@ -85,13 +114,18 @@ export function CorePortfolio() {
 
         <div className="text-right font-mono text-[10px] text-[#505068]">
           {pricesUpdating ? <span className="text-[#79CBFF]">Updating prices…</span> : <span>Quotes idle</span>}
-
-          {quoteError ? <span className="mt-1 block text-[#EF4444]">{quoteError}</span> : null}
         </div>
       </header>
 
       {dca.loadError ? (
-        <div className="rounded-lg border border-[rgba(239,68,68,0.35)] px-4 py-3 font-mono text-xs text-[#FCA5A5]">{dca.loadError}</div>
+        <DataStaleBanner
+          message={dca.loadError}
+          context={
+            dca.hasRecoverableWeeklyDcaData
+              ? 'Core ladder and tiers reflect the last loaded `core_etfs` + settings row.'
+              : 'Could not hydrate core ETFs yet — retry after confirming RLS/network.'
+          }
+        />
       ) : null}
 
       {!dca.hasSettingsRow ? (
@@ -119,7 +153,7 @@ export function CorePortfolio() {
           </div>
         ) : (
           rowsWithActual.map((r) => (
-            <article
+            <MotionCard
               key={r.ticker}
               className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-colors duration-150 hover:border-[rgba(77,184,255,0.22)]"
             >
@@ -214,7 +248,7 @@ export function CorePortfolio() {
 
               </div>
 
-            </article>
+            </MotionCard>
           ))
         )}
 

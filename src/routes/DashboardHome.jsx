@@ -12,9 +12,15 @@ import { PortfolioBalanceSnapshot } from '../components/dashboard/PortfolioBalan
 import { PortfolioBriefingPanel } from '../components/dashboard/PortfolioBriefingPanel.jsx'
 import { DcaWidget } from '../components/DcaWidget.jsx'
 import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
+import { useInvTheme } from '../context/InvThemeContext.jsx'
+import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
+import { MotionCard } from '../components/ui/MotionCard.jsx'
+import { DashboardPageSkeleton } from '../components/dashboard/DashboardPageSkeleton.jsx'
 
 export function DashboardHome() {
   const navigate = useNavigate()
+
+  const theme = useInvTheme()
 
   const ss = useSharesightIntegration()
 
@@ -56,13 +62,21 @@ export function DashboardHome() {
 
     typeof settingsPrefs.appearance?.preferred_chart_period === 'string' ? settingsPrefs.appearance.preferred_chart_period : undefined
 
+  if (!dash.dashboardHydrated) {
+    return (
+      <div className={`${theme.fg} min-h-[50vh]`}>
+        <DashboardPageSkeleton />
+      </div>
+    )
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-4 pb-8 text-[#F0F0F8] lg:px-10">
+    <div className={`mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-4 pb-8 lg:px-10 ${theme.fg}`}>
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-semibold">Dashboard</h1>
 
-          <p className="mt-2 max-w-[76ch] text-sm text-[#9090A8]">
+          <p className={`mt-2 max-w-[76ch] text-sm ${theme.muted}`}>
             First-line portfolio health sourced from Sharesight plus Supabase overlays. Alerts respect native currency for buy
             zones; FX feeds valuation only.
 
@@ -72,7 +86,7 @@ export function DashboardHome() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+            className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
             onClick={() => void ss.refreshSharesightNow()}
             disabled={ss.reconnectRequired || ss.isSyncing}
           >
@@ -81,7 +95,7 @@ export function DashboardHome() {
 
           <button
             type="button"
-            className="rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+            className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={!ss.supabaseConfigured}
             onClick={async () => {
               await ss.signOut()
@@ -98,19 +112,34 @@ export function DashboardHome() {
         <div className="rounded-lg border border-[rgba(245,158,11,0.35)] bg-[rgba(245,158,11,0.08)] px-4 py-3">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#F59E0B]">Sharesight diagnostics</p>
 
-          <pre className="mt-2 max-h-48 overflow-auto font-mono text-[11px] text-[#F0F0F8]">{ss.surfaceError ?? ss.lastSyncError}</pre>
+          <pre className="mt-2 max-h-48 overflow-auto font-mono text-[11px] text-inherit">{ss.surfaceError ?? ss.lastSyncError}</pre>
         </div>
       ) : null}
 
       {dash.loadError ? (
-        <div className="rounded-lg border border-[rgba(239,68,68,0.35)] px-4 py-3 font-mono text-xs text-[#EF4444]">{dash.loadError}</div>
+        <DataStaleBanner
+          message={dash.loadError}
+          context={
+            dash.hasRecoverableDashboardData
+              ? 'Showing last loaded dashboard data from Supabase along with cached quotes where available.'
+              : 'No cached dashboard payload yet — use Refresh once connectivity or RLS permits.'
+          }
+        />
       ) : null}
 
       {sp.loadError ? (
-        <div className="rounded-lg border border-[rgba(239,68,68,0.35)] px-4 py-3 font-mono text-xs text-[#EF4444]">{sp.loadError}</div>
+        <DataStaleBanner
+          message={sp.loadError}
+          context={
+            sp.hasRecoverableSatelliteData
+              ? 'Scores and allocations still reflect the last satellite load.'
+              : 'Satellite cards will populate after positions load.'
+          }
+        />
       ) : null}
 
-      <PortfolioHealthBar
+      <MotionCard>
+        <PortfolioHealthBar
         totalPortfolioAud={dash.totalPortfolioAud}
 
         investedCoreAud={dash.investedCoreAud}
@@ -140,9 +169,12 @@ export function DashboardHome() {
         onSyncNow={() => void ss.refreshSharesightNow()}
 
         isSyncing={ss.isSyncing}
-      />
+        />
+      </MotionCard>
 
-      <PortfolioBriefingPanel dashboard={dash} satelliteCards={sp.cards} />
+      <MotionCard>
+        <PortfolioBriefingPanel dashboard={dash} satelliteCards={sp.cards} />
+      </MotionCard>
 
       <DashboardAlerts
         positions={dash.positions}
@@ -153,34 +185,40 @@ export function DashboardHome() {
         weeklyDcaBaseAud={weeklyDcaBaseAud}
       />
 
-      <PortfolioTrendChart
+      <MotionCard key={`chart-${`${dash.settingsRow?.updated_at ?? 'na'}`.slice(0, 24)}-${defaultBench ?? ''}-${prefChartPeriod ?? ''}`}>
+        <PortfolioTrendChart
+          perfTotal={perfTotal}
 
-        key={`chart-${`${dash.settingsRow?.updated_at ?? 'na'}`.slice(0, 24)}-${defaultBench ?? ''}-${prefChartPeriod ?? ''}`}
+          perfCore={perfCore}
 
-        perfTotal={perfTotal}
+          perfSat={perfSat}
 
-        perfCore={perfCore}
+          totalCashAud={dash.totalCashAud}
 
-        perfSat={perfSat}
+          unrealisedAud={dash.unrealisedAud}
 
-        totalCashAud={dash.totalCashAud}
+          initialBenchSymbol={defaultBench}
 
-        unrealisedAud={dash.unrealisedAud}
-
-        initialBenchSymbol={defaultBench}
-
-        preferredPeriod={prefChartPeriod}
-      />
+          preferredPeriod={prefChartPeriod}
+        />
+      </MotionCard>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <DashboardSatelliteStrip cards={sp.cards} />
+        <MotionCard>
+          <DashboardSatelliteStrip cards={sp.cards} />
+        </MotionCard>
 
-        <DashboardWatchPanel rows={dash.watchlistItems} scores={dash.latestScoreByWid} />
+        <MotionCard>
+          <DashboardWatchPanel rows={dash.watchlistItems} scores={dash.latestScoreByWid} />
+        </MotionCard>
       </div>
 
-      <DcaWidget allowBaseEdit density="dashboard" />
+      <MotionCard>
+        <DcaWidget allowBaseEdit density="dashboard" />
+      </MotionCard>
 
-      <PortfolioBalanceSnapshot
+      <MotionCard>
+        <PortfolioBalanceSnapshot
         coreTargetPct={dash.coreTargetPct}
         satelliteTargetPct={dash.satelliteTargetPct}
         actualCorePctInvested={dash.actualCorePctInvested}
@@ -189,10 +227,11 @@ export function DashboardHome() {
         investedSatelliteAud={dash.investedSatelliteAud}
         bookCoreAud={dash.bookCoreAud}
         bookSatelliteAud={dash.bookSatelliteAud}
-      />
+        />
+      </MotionCard>
 
       <details className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#111118] px-4 py-3 text-xs text-[#9090A8]">
-        <summary className="cursor-pointer font-semibold text-[#F0F0F8]">Developer snapshots</summary>
+        <summary className="cursor-pointer font-semibold text-inherit">Developer snapshots</summary>
 
         <ul className="mt-3 list-disc space-y-2 pl-4">
           <li>

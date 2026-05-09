@@ -1,10 +1,67 @@
 @import "tailwindcss";
 
+/* Investment app — CLAUDE.md §2 design tokens */
+
 @theme {
   --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'DM Mono', ui-monospace, monospace;
+
+  --color-inv-page: #0a0a0f;
+  --color-inv-surface-1: #111118;
+  --color-inv-surface-2: #1a1a24;
+  --color-inv-surface-3: #22222f;
+  --color-inv-border: rgba(255, 255, 255, 0.06);
+  --color-inv-border-strong: rgba(255, 255, 255, 0.12);
+  --color-inv-glass: rgba(255, 255, 255, 0.04);
+  --color-inv-text: #f0f0f8;
+  --color-inv-text-secondary: #9090a8;
+  --color-inv-text-tertiary: #505068;
+  --color-inv-accent: #4db8ff;
+  --color-inv-accent-hover: #79cbff;
+  --color-inv-positive: #22c55e;
+  --color-inv-warning: #f59e0b;
+  --color-inv-danger: #ef4444;
+
+  --color-inv-light-page: #f4f4f8;
+  --color-inv-light-s1: #ffffff;
+  --color-inv-light-s2: #f0f0f5;
+  --color-inv-light-s3: #e8e8f0;
+  --color-inv-light-text: #0a0a1a;
+  --color-inv-light-muted: #50507a;
+  --color-inv-light-accent: #1a8fd1;
 }
 
 body {
   font-family: var(--font-sans);
+}
+
+/* Skeleton — dark default; lighten when `.inv-shell-light` wraps the app shell */
+.inv-skel {
+  border-radius: 0.375rem;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inv-skel {
+    animation: none;
+  }
+}
+
+.inv-shell .inv-skel {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.inv-shell-light .inv-skel {
+  background-color: rgba(0, 0, 0, 0.07);
+}
+
+/* Tabular figures for monospace money columns where needed */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Explicit numeric/tabular monospace for amounts (CLAUDE.md typography) */
+.font-mono-money {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }

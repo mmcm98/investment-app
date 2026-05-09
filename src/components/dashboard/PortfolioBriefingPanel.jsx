@@ -10,6 +10,10 @@ import { buildPortfolioBriefingContext } from '../../lib/briefing/buildPortfolio
 
 import { postPortfolioBriefing } from '../../lib/analysis/portfolioBriefingClient.js'
 
+import { DataStaleBanner } from '../ui/DataStaleBanner.jsx'
+
+import { Skeleton } from '../ui/Skeleton.jsx'
+
 /** @param {{ md: string }} props */
 
 function BriefingMarkdown({ md }) {
@@ -35,6 +39,8 @@ export function PortfolioBriefingPanel({ dashboard, satelliteCards }) {
 
   const [historyError, setHistoryError] = useState(/** @type {string|null} */ (null))
 
+  const [historyHydrating, setHistoryHydrating] = useState(true)
+
   const [selectedId, setSelectedId] = useState(/** @type {string|null} */ (null))
 
   const [compareId, setCompareId] = useState(/** @type {string|null} */ (null))
@@ -50,9 +56,14 @@ export function PortfolioBriefingPanel({ dashboard, satelliteCards }) {
   const paused = dashboard.settingsRow?.global_api_pause === true
 
   const loadHistory = useCallback(async () => {
-    if (!supabase || !userPresent) return
+    if (!supabase || !userPresent) {
+      setHistoryHydrating(false)
+
+      return
+    }
 
     setHistoryError(null)
+    setHistoryHydrating(true)
 
     try {
       const { data: ud } = await supabase.auth.getUser()
@@ -81,6 +92,8 @@ export function PortfolioBriefingPanel({ dashboard, satelliteCards }) {
       })
     } catch (e) {
       setHistoryError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setHistoryHydrating(false)
     }
   }, [supabase, userPresent])
 
@@ -239,13 +252,37 @@ export function PortfolioBriefingPanel({ dashboard, satelliteCards }) {
       {phase === 'error' && errorText ? (
         <p className="mt-4 font-mono text-xs text-[#EF4444]">
           {errorText}{' '}
-          <button type="button" className="text-[#79CBFF] underline" onClick={() => setPhase('idle')}>
+          <button
+            type="button"
+            className="min-h-[44px] touch-manipulation text-[#79CBFF] underline"
+            onClick={() => setPhase('idle')}
+          >
             Dismiss
           </button>
         </p>
       ) : null}
 
-      {historyError ? <p className="mt-4 font-mono text-[11px] text-[#EF4444]">{historyError}</p> : null}
+      {historyError ? (
+        <div className="mt-4">
+          <DataStaleBanner
+            message={historyError}
+            context={
+              history.length > 0
+                ? 'Previous briefings remain selectable below.'
+                : 'Briefing list will populate after Supabase responds.'
+            }
+          />
+        </div>
+      ) : null}
+
+      {historyHydrating && history.length === 0 ? (
+        <div className="mt-6 space-y-3" aria-busy aria-label="Loading briefing history">
+          <Skeleton className="h-12 w-full max-w-xl rounded-lg" />
+
+          <Skeleton className="h-[120px] w-full rounded-xl" />
+
+        </div>
+      ) : null}
 
       <div className="mt-6 flex flex-wrap gap-4">
         <label className="flex flex-col gap-1 font-mono text-[10px] text-[#505068]">

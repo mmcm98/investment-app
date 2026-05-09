@@ -19,6 +19,8 @@ export function useWeeklyDca() {
   const [settingsRow, setSettingsRow] = useState(/** @type {Record<string, unknown> | null} */ (null))
   const [coreRows, setCoreRows] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [loadError, setLoadError] = useState(/** @type {string | null} */ (null))
+  const [weeklyDcaFetching, setWeeklyDcaFetching] = useState(false)
+  const [weeklyDcaHydrated, setWeeklyDcaHydrated] = useState(false)
 
   useEffect(() => {
     if (!supabase || !userPresent) {
@@ -26,6 +28,7 @@ export function useWeeklyDca() {
         setSettingsRow(null)
         setCoreRows([])
         setLoadError(null)
+        setWeeklyDcaHydrated(false)
       })
       return undefined
     }
@@ -34,6 +37,7 @@ export function useWeeklyDca() {
 
     void (async () => {
       setLoadError(null)
+      setWeeklyDcaFetching(true)
       try {
         const { data: ud } = await supabase.auth.getUser()
         const uid = ud.user?.id
@@ -61,6 +65,11 @@ export function useWeeklyDca() {
         setCoreRows((coreRes.data ?? []) /** @type {Record<string, unknown>[]} */)
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (!cancelled) {
+          setWeeklyDcaFetching(false)
+          setWeeklyDcaHydrated(true)
+        }
       }
     })()
 
@@ -92,10 +101,15 @@ export function useWeeklyDca() {
     })
   }, [settingsRow, coreRows, mergedRows])
 
+  const hasRecoverableWeeklyDcaData = Boolean(settingsRow) || coreRows.length > 0
+
   return {
     supabaseConfigured,
     userPresent,
     loadError,
+    weeklyDcaFetching,
+    weeklyDcaHydrated,
+    hasRecoverableWeeklyDcaData,
     hasSettingsRow: Boolean(settingsRow),
     reloadWeeklyDca: () => setReloadKey((n) => n + 1),
     ...computed,

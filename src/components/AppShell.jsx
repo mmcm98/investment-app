@@ -2,6 +2,8 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { Layers, Radar, Satellite, Settings, LayoutDashboard } from 'lucide-react'
 
 import { useShellUserFlags } from '../hooks/useShellUserFlags.js'
+import { useLivePrices } from '../context/LivePricesContext.jsx'
+import { InvThemeProvider } from '../context/InvThemeContext.jsx'
 
 const desktopLink = (light) => ({ isActive }) =>
   [
@@ -27,21 +29,57 @@ const NAV = [
 export function AppShell() {
   const { globalApiPaused, themeClass } = useShellUserFlags()
 
+  const { quoteError, pricesUpdating } = useLivePrices()
+
   const light = themeClass === 'light'
 
-  return (
-    <div className={`min-h-screen ${light ? 'bg-[#e6e6ee] text-[#12121a]' : 'bg-[#0A0A0F] text-[#F0F0F8]'}`}>
-      {globalApiPaused ? (
-        <div className="sticky top-0 z-50 border-b border-[rgba(239,68,68,0.55)] bg-[rgba(127,29,29,0.92)] px-4 py-2 text-center font-mono text-[11px] text-[#FEE2E2]">
-          API pause is active — Gemini and Claude traffic is suspended. Clear <span className="font-semibold">global_api_pause</span> in Settings §10.16 to resume.
+  const showPauseBanner = globalApiPaused
 
+  const showQuoteBanner = Boolean(quoteError)
+
+  const bannerStack = showPauseBanner && showQuoteBanner ? 2 : showPauseBanner || showQuoteBanner ? 1 : 0
+
+  const fixedTopUnderBanners =
+    bannerStack === 2 ? 'top-[5.25rem] lg:top-[5.25rem]' : bannerStack === 1 ? 'top-12 lg:top-12' : 'top-0'
+
+  const mainTopPad =
+    bannerStack === 2 ? 'pt-[5.25rem] lg:pt-[5.25rem]' : bannerStack === 1 ? 'pt-12 lg:pt-12' : 'pt-6 lg:pt-10'
+
+  return (
+    <div
+      className={`inv-shell min-h-screen ${light ? 'inv-shell-light bg-[#F4F4F8] text-[#0a0a1a]' : 'bg-[#0A0A0F] text-[#F0F0F8]'}`}
+    >
+      {bannerStack > 0 ? (
+        <div className="sticky top-0 z-50">
+          {showPauseBanner ? (
+            <div className="border-b border-[rgba(239,68,68,0.55)] bg-[rgba(127,29,29,0.92)] px-4 py-2 text-center font-mono text-[11px] text-[#FEE2E2]">
+              API pause is active — Gemini and Claude traffic is suspended. Clear <span className="font-semibold">global_api_pause</span> in
+              Settings §10.16 to resume.
+            </div>
+          ) : null}
+
+          {showQuoteBanner ? (
+            <div
+              role="status"
+
+              className={`border-b px-4 py-2 text-center font-mono text-[11px] ${
+                light
+                  ? 'border-[rgba(180,83,9,0.35)] bg-[rgba(254,243,199,0.85)] text-[#78350f]'
+                  : 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#FEF3C7]'
+              }`}
+            >
+              Market quote refresh issue — showing last cached prices. {pricesUpdating ? 'Retrying…' : ''}
+
+              <span className="mt-1 block opacity-90">{quoteError}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
       <aside
-        className={`fixed left-0 z-30 hidden h-full w-[210px] shrink-0 border-r px-4 pb-10 pt-8 lg:flex lg:flex-col ${
-          globalApiPaused ? 'top-10' : 'top-0'
-        } ${light ? 'border-[rgba(0,0,0,0.08)] bg-white' : 'border-[rgba(255,255,255,0.06)] bg-[#111118]'}`}
+        className={`fixed left-0 z-30 hidden h-full w-[210px] shrink-0 border-r px-4 pb-10 pt-8 lg:flex lg:flex-col ${fixedTopUnderBanners} ${
+          light ? 'border-[rgba(0,0,0,0.08)] bg-white' : 'border-[rgba(255,255,255,0.06)] bg-[#111118]'
+        }`}
       >
         <div className="px-3">
 
@@ -61,10 +99,10 @@ export function AppShell() {
         </div>
       </aside>
 
-      <main
-        className={`min-h-screen flex-1 pb-24 lg:ml-[210px] lg:pb-10 ${globalApiPaused ? 'pt-12 lg:pt-12' : 'pt-6 lg:pt-10'}`}
-      >
-        <Outlet />
+      <main className={`min-h-screen flex-1 pb-24 lg:ml-[210px] lg:pb-10 ${mainTopPad}`}>
+        <InvThemeProvider>
+          <Outlet />
+        </InvThemeProvider>
       </main>
 
       <nav
@@ -72,7 +110,7 @@ export function AppShell() {
         aria-label="Primary"
 
 
-        className={`fixed inset-x-0 bottom-0 z-40 grid h-14 grid-cols-5 gap-px border-t lg:hidden ${
+        className={`fixed inset-x-0 bottom-0 z-40 grid min-h-[56px] grid-cols-5 gap-px border-t lg:hidden ${
           light ? 'border-[rgba(0,0,0,0.08)] bg-white' : 'border-[rgba(255,255,255,0.08)] bg-[#111118]'
         }`}
 
@@ -84,14 +122,14 @@ export function AppShell() {
 
             end={Boolean(end)}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-1 font-mono text-[10px] transition-colors duration-150 ${
+              `flex min-h-[44px] min-w-0 touch-manipulation flex-col items-center justify-center gap-1 px-2 py-2 font-mono text-[10px] transition-colors duration-150 ${
                 isActive ? (light ? 'text-[#1D4ED8]' : 'text-[#79CBFF]') : light ? 'text-[#5c5c6e]' : 'text-[#9090A8]'
               }`
             }
 
 
           >
-            <Icon className="h-[18px] w-[18px]" aria-hidden />
+            <Icon className="h-[22px] w-[22px] shrink-0" aria-hidden />
 
             <span className="truncate px-1">{label}</span>
           </NavLink>

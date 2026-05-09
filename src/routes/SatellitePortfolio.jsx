@@ -1,6 +1,10 @@
 ﻿import { Link } from 'react-router-dom'
 import { AddTickerCombobox } from '../components/satellite/AddTickerCombobox.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
+import { useInvTheme } from '../context/InvThemeContext.jsx'
+import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
+import { MotionCard } from '../components/ui/MotionCard.jsx'
+import { Skeleton } from '../components/ui/Skeleton.jsx'
 
 function fmtPct(n) {
   if (n == null || !Number.isFinite(Number(n))) return ''
@@ -24,16 +28,18 @@ function fmtAudParen(n) {
 export function SatellitePortfolio() {
   const sp = useSatellitePortfolio()
 
+  const theme = useInvTheme()
+
   async function onToggleAud(e) {
     await sp.setPrefShowAud(e.target.checked)
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-10 pb-24 text-[#F0F0F8] lg:pb-10 lg:px-10">
+    <div className={`mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-10 pb-24 lg:pb-10 lg:px-10 ${theme.fg}`}>
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-semibold">Satellite portfolio</h1>
-          <p className="mt-2 max-w-[82ch] text-sm text-[#9090A8]">
+          <p className={`mt-2 max-w-[82ch] text-sm ${theme.muted}`}>
             Guidance-only allocation from scores (65% haircut threshold). Sharesight satellite holdings are the spine;
             Supabase positions carry locked FMP/Yahoo symbols and analysis state.
           </p>
@@ -44,10 +50,25 @@ export function SatellitePortfolio() {
         </label>
       </header>
 
-      {sp.loadError ? (
-        <div className="rounded-xl border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.08)] px-4 py-3 font-mono text-xs text-[#EF4444]">
-          {sp.loadError}
+      {!sp.satelliteHydrated ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Skeleton className="min-h-[220px] rounded-xl" />
+
+          <Skeleton className="min-h-[220px] rounded-xl" />
+
+          <Skeleton className="min-h-[220px] rounded-xl md:col-span-2" />
         </div>
+      ) : null}
+
+      {sp.loadError ? (
+        <DataStaleBanner
+          message={sp.loadError}
+          context={
+            sp.hasRecoverableSatelliteData
+              ? 'Showing last loaded satellite holdings, allocations, and scores.'
+              : 'Awaiting successful load — Sharesight holdings may appear once sync completes.'
+          }
+        />
       ) : null}
 
       {!sp.remainderValid ? (
@@ -60,7 +81,8 @@ export function SatellitePortfolio() {
       <AddTickerCombobox onCreated={() => void sp.refresh()} />
 
       <section className="grid grid-cols-1 gap-5 md:grid-cols-2">
-        {sp.cards.map((c) => {
+        {sp.satelliteHydrated
+          ? sp.cards.map((c) => {
           const q = c.mergedQuote
           /** @type {Record<string, unknown>|null} */
           const pos = /** @type {Record<string, unknown>|null} */ (c.position)
@@ -90,7 +112,7 @@ export function SatellitePortfolio() {
           const href = c.positionId ? `/satellite/position/${c.positionId}` : null
 
           return (
-            <article
+            <MotionCard
               key={c.rowKey}
               className="flex flex-col rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
             >
@@ -116,7 +138,7 @@ export function SatellitePortfolio() {
 
                 {href ? (
                   <Link
-                    className="shrink-0 rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs text-[#79CBFF] hover:border-[rgba(77,184,255,0.55)]"
+                    className="inline-flex min-h-[44px] shrink-0 items-center rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs text-[#79CBFF] touch-manipulation hover:border-[rgba(77,184,255,0.55)]"
                     to={href}
                   >
                     Open
@@ -128,7 +150,7 @@ export function SatellitePortfolio() {
                 )}
               </div>
 
-              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs text-[#9090A8] md:grid-cols-4">
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs font-mono text-[#9090A8] md:grid-cols-4 tabular-nums">
                 <div>
                   <dt className="font-mono text-[10px] uppercase tracking-wide text-[#505068]">Score</dt>
                   <dd className="mt-1 font-mono text-sm text-[#F0F0F8]">
@@ -205,13 +227,16 @@ export function SatellitePortfolio() {
                       className="min-w-[180px] flex-1 rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 font-mono text-xs"
                     />
 
-                    <button type="submit" className="rounded-md bg-[#4DB8FF] px-3 py-2 font-mono text-xs font-semibold text-[#0A0A0F]">
+                    <button
+                      type="submit"
+                      className="min-h-[44px] rounded-md bg-[#4DB8FF] px-3 py-2 font-mono text-xs font-semibold text-[#0A0A0F]"
+                    >
                       Save
                     </button>
 
                     <button
                       type="button"
-                      className="rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs"
+                      className="min-h-[44px] rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs touch-manipulation"
                       onClick={() => void sp.saveAllocationOverride(c.positionId, null, '')}
                     >
                       Clear override
@@ -231,7 +256,11 @@ export function SatellitePortfolio() {
               {showMonitor && buyZones.length > 0 ? (
                 <div className="mt-3 rounded-lg border border-[rgba(34,197,94,0.35)] bg-[rgba(34,197,94,0.06)] px-3 py-2 text-xs">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-[#22C55E]">Buy zones active</span>
-                  <pre className="mt-2 max-h-[140px] overflow-auto font-mono text-[11px] text-[#F0F0F8]">
+                  <p className="mt-2 text-[11px] text-[#A7F3D0]">
+                    Compare prices and structural floors using the{' '}
+                    <span className="font-semibold text-[#DCFCE7]">listing/native currency only</span> — not AUD equivalents.
+                  </p>
+                  <pre className="mt-2 max-h-[140px] overflow-auto font-mono text-[11px] text-[#F0F0F8] tabular-nums">
                     {JSON.stringify(buyZones, null, 2)}
                   </pre>
                 </div>
@@ -247,13 +276,14 @@ export function SatellitePortfolio() {
                   <pre className="mt-2 max-h-[120px] overflow-auto font-mono text-[11px] text-[#F0F0F8]">{JSON.stringify(exits, null, 2)}</pre>
                 </div>
               ) : null}
-            </article>
+            </MotionCard>
           )
-        })}
+          })
+          : null}
       </section>
 
-      {sp.cards.length === 0 ? (
-        <p className="text-sm text-[#9090A8]">No satellite holdings in Sharesight yet (or everything filtered as cash-like).</p>
+      {sp.satelliteHydrated && sp.cards.length === 0 ? (
+        <p className={`text-sm ${theme.muted}`}>No satellite holdings in Sharesight yet (or everything filtered as cash-like).</p>
       ) : null}
     </div>
   )
