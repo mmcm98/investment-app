@@ -25,6 +25,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/analysis/triad',
       },
+      '/api/analysis/watchlist-flash': {
+        target: 'http://127.0.0.1:8791',
+        changeOrigin: true,
+        rewrite: () => '/analysis/watchlist-flash',
+      },
     },
   },
 })

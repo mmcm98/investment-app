@@ -4,7 +4,8 @@
  * Run `npm run dev:analysis-api` before Vite dev; vite proxies `/api/analysis/triad` → `/analysis/triad`.
  */
 import http from 'node:http'
-import handler from '../api/analysis/triad.js'
+import triadHandler from '../api/analysis/triad.js'
+import watchlistFlashHandler from '../api/analysis/watchlistFlash.js'
 
 const PORT = Number.parseInt(`${process.env.ANALYSIS_DEV_PORT ?? '8791'}`, 10)
 
@@ -17,20 +18,27 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  if (!req.url || !req.url.startsWith('/analysis/triad')) {
-    res.statusCode = 404
-    res.setHeader('Content-Type', 'text/plain')
-    res.end('Not found')
+  const url = `${req.url ?? ''}`
+
+  if (url.startsWith('/analysis/triad')) {
+    await triadHandler(req, res)
 
     return
   }
 
-  /** @type {import('node:http').IncomingMessage} */
-  const nodeReq = req
+  if (url.startsWith('/analysis/watchlist-flash')) {
+    await watchlistFlashHandler(req, res)
 
-  await handler(nodeReq, res)
+    return
+  }
+
+  res.statusCode = 404
+  res.setHeader('Content-Type', 'text/plain')
+  res.end('Not found')
 })
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.warn(`[dev-analysis-api] POST http://127.0.0.1:${PORT}/analysis/triad`)
+  console.warn(
+    `[dev-analysis-api] triad POST http://127.0.0.1:${PORT}/analysis/triad · flash POST http://127.0.0.1:${PORT}/analysis/watchlist-flash`,
+  )
 })

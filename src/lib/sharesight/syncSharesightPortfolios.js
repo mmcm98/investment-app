@@ -14,6 +14,7 @@ import {
   upsertSharesightOAuthRow,
 } from './oauthCredentialsRepository.js'
 import { mapWithConcurrency } from './asyncPool.js'
+import { promoteWatchlistMatchesAfterSync } from '../watchlist/promoteWatchlistMatches.js'
 
 function isoDateUtc(d = new Date()) {
   return d.toISOString().slice(0, 10)
@@ -442,14 +443,22 @@ export async function syncSharesightPortfolios(supabase, args) {
       throw new Error(summary)
     }
 
+    try {
+      await promoteWatchlistMatchesAfterSync(supabase, userId)
+    } catch (e) {
+      partialWarnings.push(`Watchlist promotion: ${formatErrorBestEffort(e)}`)
+    }
+
+    const finalWarnings = partialWarnings.filter(Boolean)
+
     await patchSharesightSyncMeta(supabase, {
       last_successful_sync_at: new Date().toISOString(),
-      last_sync_error: mergedWarnings.length ? mergedWarnings.join(' | ') : null,
+      last_sync_error: finalWarnings.length ? finalWarnings.join(' | ') : null,
     })
 
     await finalizeSharesightSyncRun(supabase, syncRunId, {
-      status: mergedWarnings.length ? 'partial' : 'success',
-      error_message: mergedWarnings.length ? mergedWarnings.join(' | ') : null,
+      status: finalWarnings.length ? 'partial' : 'success',
+      error_message: finalWarnings.length ? finalWarnings.join(' | ') : null,
     })
 
     finalizedThisSyncRun = true
@@ -457,7 +466,7 @@ export async function syncSharesightPortfolios(supabase, args) {
     return {
       syncRunId,
       ok: true,
-      partialWarnings: mergedWarnings,
+      partialWarnings: finalWarnings,
     }
   } catch (error) {
     const message = formatErrorBestEffort(error)

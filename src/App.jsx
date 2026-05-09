@@ -9,6 +9,7 @@ import { SatellitePortfolio } from './routes/SatellitePortfolio.jsx'
 import { PositionDetail } from './routes/PositionDetail.jsx'
 import { CorePortfolio } from './routes/CorePortfolio.jsx'
 import { WatchlistPage } from './routes/WatchlistPage.jsx'
+import { WatchlistItemDetail } from './routes/WatchlistItemDetail.jsx'
 import { SettingsPage } from './routes/SettingsPage.jsx'
 
 function AuthLoading() {
@@ -72,6 +73,8 @@ function AppRoutes() {
         <Route path="satellite/position/:id" element={<PositionDetail />} />
 
         <Route path="watchlist" element={<WatchlistPage />} />
+
+        <Route path="watchlist/:id" element={<WatchlistItemDetail />} />
 
         <Route path="settings" element={<SettingsPage />} />
       </Route>

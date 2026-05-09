@@ -42,3 +42,10 @@ export async function postTickerSearch(query, limit = 15) {
 export async function postChartHistory(symbol, preset = '1Y') {
   return postMarketBatch({ op: 'chartHistory', symbol, preset })
 }
+
+/**
+ * @param {string} symbol FMP base symbol e.g. AAPL
+ */
+export async function postEquityFacts(symbol) {
+  return postMarketBatch({ op: 'equityFacts', symbol })
+}

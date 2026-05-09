@@ -453,6 +453,78 @@ export async function tickerSearchOp(body, env) {
   return { ok: true, results }
 }
 
+/**
+ * Composite FMP profile + quote (+ key-metrics TTM) for watchlist enrichment.
+ *
+ * @param {{ symbol?: string|null }} body
+ * @param {typeof process.env | Record<string,string|undefined>} env
+ */
+export async function equityFactsOp(body, env) {
+  const key = resolveFmpApiKey(env)
+
+  const symbolRaw = `${body.symbol ?? ''}`.trim().toUpperCase().replace(/^=/, '')
+
+  if (!symbolRaw) return { ok: false, error: 'symbol_required', profile: null, quote: null, key_metrics: null }
+
+  if (!key) return { ok: false, error: 'fmp_key_missing', profile: null, quote: null, key_metrics: null }
+
+  const profileUrl = `${FMP_BASE}/profile/${encodeURIComponent(symbolRaw)}?apikey=${encodeURIComponent(key)}`
+
+  const quoteUrl = `${FMP_BASE}/quote/${encodeURIComponent(symbolRaw)}?apikey=${encodeURIComponent(key)}`
+
+  const kmUrl = `${FMP_BASE}/key-metrics-ttm/${encodeURIComponent(symbolRaw)}?apikey=${encodeURIComponent(key)}`
+
+  try {
+    const [pRes, qRes] = await Promise.all([
+      fetch(profileUrl, { headers: { Accept: 'application/json' } }),
+      fetch(quoteUrl, { headers: { Accept: 'application/json' } }),
+    ])
+
+    /** @type {unknown} */
+    let pArr = []
+
+    /** @type {unknown} */
+    let qArr = []
+
+    try {
+      if (pRes.ok) pArr = await pRes.json()
+    } catch {
+      /* */
+    }
+
+    try {
+      if (qRes.ok) qArr = await qRes.json()
+    } catch {
+      /* */
+    }
+
+    /** @type {Record<string, unknown>|null} */
+    const profile = Array.isArray(pArr) && pArr[0] && typeof pArr[0] === 'object' ? /** @type {Record<string, unknown>} */ (pArr[0]) : null
+
+    /** @type {Record<string, unknown>|null} */
+    const quote = Array.isArray(qArr) && qArr[0] && typeof qArr[0] === 'object' ? /** @type {Record<string, unknown>} */ (qArr[0]) : null
+
+    /** @type {Record<string, unknown>|null} */
+    let keyMetrics = null
+
+    try {
+      const kmRes = await fetch(kmUrl, { headers: { Accept: 'application/json' } })
+
+      if (kmRes.ok) {
+        const kmArr = /** @type {unknown} */ (await kmRes.json())
+
+        if (Array.isArray(kmArr) && kmArr[0] && typeof kmArr[0] === 'object') keyMetrics = /** @type {Record<string, unknown>} */ (kmArr[0])
+      }
+    } catch {
+      keyMetrics = null
+    }
+
+    return { ok: true, symbol: symbolRaw, profile, quote, key_metrics: keyMetrics }
+  } catch (e) {
+    return { ok: false, error: `${e}`, profile: null, quote: null, key_metrics: null }
+  }
+}
+
 /** @param {Record<string, unknown>} body */
 
 export async function dispatchMarketRpc(body, env) {
@@ -469,6 +541,8 @@ export async function dispatchMarketRpc(body, env) {
   if (op === 'tickerSearch') return await tickerSearchOp(body, env)
 
   if (op === 'chartHistory') return await chartHistoryOp(body)
+
+  if (op === 'equityFacts') return await equityFactsOp(body, env)
 
   return { ok: false, error: `unknown_op:${op}` }
 }

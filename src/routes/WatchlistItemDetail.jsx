@@ -1,71 +1,130 @@
 import { Link, useParams } from 'react-router-dom'
 
-import { useMemo, useState } from 'react'
-
-import { useLivePrices } from '../context/LivePricesContext.jsx'
-
-import { usePositionDetail } from '../hooks/usePositionDetail.js'
-
-import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
-
-import { numOrNull } from '../lib/satellite/satelliteMerge.js'
+import { useEffect, useMemo, useState } from 'react'
 
 import { ScoringWorkbench } from '../components/analysis/ScoringWorkbench.jsx'
 
 import { DetailTabStrip, POSITION_DETAIL_TAB_DEFS } from '../components/detail/DetailTabStrip.jsx'
 
+import { postMarketBatch } from '../lib/market/marketApi.js'
+
+import { useWatchlistDetail } from '../hooks/useWatchlistDetail.js'
+
+import { numOrNull } from '../lib/satellite/satelliteMerge.js'
+
 /** @param {Record<string, unknown>|null} p */
+
 /** @returns {unknown} */
 
 function rz(p, k) {
   return p && typeof p === 'object' ? Reflect.get(p, k) : undefined
 }
 
-export function PositionDetail() {
+/** @returns {unknown} */
+
+function rzNum(o, k) {
+  const raw = rz(o, k)
+
+  const n =
+    typeof raw === 'number'
+      ? raw
+      : raw != null && Number.isFinite(Number(raw))
+        ? Number(raw)
+        : Number.parseFloat(`${raw ?? ''}`)
+
+  return Number.isFinite(n) ? n : null
+}
+
+export function WatchlistItemDetail() {
   const { id } = useParams()
 
-  const det = usePositionDetail(id)
-
-  const lp = useLivePrices()
+  const det = useWatchlistDetail(id)
 
   const [tab, setTab] = useState(/** @type {'overview'|'live'|'scorecard'|'research'|'monitor'} */ ('overview'))
 
-  const yahoo = det.position ? `${rz(det.position, 'yahoo_symbol') ?? ''}`.trim() : ''
+  const yahoo = det.watchlistRow ? `${rz(det.watchlistRow, 'yahoo_symbol') ?? ''}`.trim() : ''
 
-  const fmp = det.position ? `${rz(det.position, 'fmp_symbol') ?? ''}`.trim() : ''
+  const fmp = det.watchlistRow ? `${rz(det.watchlistRow, 'fmp_symbol') ?? ''}`.trim() : ''
 
-  const quote = useMemo(() => {
-    return lp.mergedRows.find(
-      (m) =>
-        `${m.portfolio_role ?? ''}`.toLowerCase() === 'satellite' &&
-        (tickersLooselyEqual(m.yahoo_symbol, yahoo) || tickersLooselyEqual(m.instrument_symbol, fmp)),
-    )
-  }, [lp.mergedRows, yahoo, fmp])
+  const exchange = det.watchlistRow ? `${rz(det.watchlistRow, 'exchange_short_name') ?? ''}`.trim() : ''
+
+  const [quote, setQuote] = useState(/** @type {Record<string, unknown>|null} */ (null))
+
+  useEffect(() => {
+    queueMicrotask(() => setQuote(null))
+
+    let cancelled = false
+
+    void (async () => {
+      if (!yahoo.trim()) return
+
+      try {
+        const qResp = /** @type {Record<string, unknown>} */ (
+          await postMarketBatch({
+            op: 'quotes',
+            items: [
+              {
+                yahooSymbol: yahoo.trim().toUpperCase(),
+                fmpSymbol: fmp.trim() || yahoo.trim(),
+                exchangeShort: exchange,
+              },
+            ],
+          })
+        )
+
+        if (cancelled) return
+
+        const quotes = /** @type {Record<string, unknown>[]} */ (Reflect.get(qResp, 'quotes') ?? [])
+
+        const head = quotes[0]
+
+        if (head && typeof head === 'object') setQuote(/** @type {Record<string, unknown>} */ (head))
+      } catch {
+        if (!cancelled) setQuote(null)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [yahoo, fmp, exchange])
+
+  const chg = rzNum(quote, 'change_percent')
+
+  const cur = det.watchlistRow ? `${rz(det.watchlistRow, 'currency') ?? ''}`.trim() : 'USD'
+
+  const nativeDisplay = rzNum(quote, 'last')
 
   const overall = det.scorecardFull ? numOrNull(rz(det.scorecardFull, 'overall_score')) : null
 
-  const awaiting = det.position ? Boolean(rz(det.position, 'awaiting_analysis')) : true
+  const awaiting = det.watchlistRow ? Boolean(rz(det.watchlistRow, 'awaiting_analysis')) : true
 
   const hasScorecard = Boolean(det.scorecardFull)
 
   const showBuyMonitor = !awaiting && overall != null && overall >= 65
 
-  const buyZones = Array.isArray(rz(det.position, 'buy_zones')) ? /** @type {unknown[]} */ (rz(det.position, 'buy_zones')) : []
+  const buyZones = Array.isArray(rz(det.watchlistRow, 'buy_zones'))
+    ? /** @type {unknown[]} */ (rz(det.watchlistRow, 'buy_zones'))
+    : []
 
-  const exits = Array.isArray(rz(det.position, 'exit_triggers')) ? /** @type {unknown[]} */ (rz(det.position, 'exit_triggers')) : []
+  const exits = Array.isArray(rz(det.watchlistRow, 'exit_triggers'))
+    ? /** @type {unknown[]} */ (rz(det.watchlistRow, 'exit_triggers'))
+    : []
 
-  const cur = det.position ? `${rz(det.position, 'currency') ?? ''}`.trim() : '—'
+  const fmpDescription = rz(det.watchlistRow, 'fmp_company_description')
 
-  const native = quote && typeof quote.display_native === 'number' ? quote.display_native : quote && typeof quote.last_price === 'number' ? quote.last_price : null
+  const descStr = typeof fmpDescription === 'string' ? fmpDescription.trim().slice(0, 880) : ''
 
-  const aud = quote && typeof quote.display_aud === 'number' ? quote.display_aud : null
-
-  const chg = quote && typeof quote.change_percent === 'number' ? quote.change_percent : null
+  const fmpMetrics =
+    rz(det.watchlistRow, 'fmp_metrics') && typeof rz(det.watchlistRow, 'fmp_metrics') === 'object'
+      ? /** @type {Record<string, unknown>} */ (rz(det.watchlistRow, 'fmp_metrics'))
+      : null
 
   const payload = det.scorecardFull && typeof rz(det.scorecardFull, 'payload') === 'object' ? rz(det.scorecardFull, 'payload') : null
 
   const synopsis = useMemo(() => {
-    const ex = det.position && typeof rz(det.position, 'extra') === 'object' ? rz(det.position, 'extra') : null
+    const ex =
+      det.watchlistRow && typeof rz(det.watchlistRow, 'extra') === 'object' ? rz(det.watchlistRow, 'extra') : null
 
     const fromPos =
       ex && typeof Reflect.get(ex, 'synopsis') === 'string' ? String(Reflect.get(ex, 'synopsis')).trim() : ''
@@ -74,8 +133,14 @@ export function PositionDetail() {
 
     const fromPayStr = typeof fromPayload === 'string' ? fromPayload.trim() : ''
 
-    return fromPos || fromPayStr
-  }, [det.position, payload])
+    if (fromPayStr) return fromPayStr
+
+    if (fromPos) return fromPos
+
+    if (descStr) return descStr.slice(0, 240)
+
+    return ''
+  }, [det.watchlistRow, payload, descStr])
 
   const lastAnalyzed = rz(det.scorecardFull, 'generated_at')
 
@@ -83,19 +148,19 @@ export function PositionDetail() {
     return (
       <div className="p-10 font-mono text-sm text-[#EF4444]">
         {det.loadError}{' '}
-        <Link className="text-[#79CBFF]" to="/satellite">
+        <Link className="text-[#79CBFF]" to="/watchlist">
           Back
         </Link>
       </div>
     )
   }
 
-  if (!det.position) {
+  if (!det.watchlistRow) {
     return (
       <div className="p-10 text-sm text-[#9090A8]">
-        Position not found.{' '}
-        <Link className="text-[#79CBFF]" to="/satellite">
-          Satellite
+        Watchlist row not found (it may have been promoted to Satellite).{' '}
+        <Link className="text-[#79CBFF]" to="/watchlist">
+          Watchlist
         </Link>
       </div>
     )
@@ -105,13 +170,13 @@ export function PositionDetail() {
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-10 pb-24 text-[#F0F0F8] lg:pb-10 lg:px-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link className="font-mono text-xs text-[#79CBFF]" to="/satellite">
-            ← Satellite
+          <Link className="font-mono text-xs text-[#79CBFF]" to="/watchlist">
+            ← Watchlist
           </Link>
 
-          <h1 className="mt-3 text-[22px] font-semibold">{`${rz(det.position, 'display_ticker') ?? fmp}`}</h1>
+          <h1 className="mt-3 text-[22px] font-semibold">{`${rz(det.watchlistRow, 'display_ticker') ?? fmp}`}</h1>
 
-          <p className="mt-2 text-sm text-[#9090A8]">{`${rz(det.position, 'name') ?? ''}`}</p>
+          <p className="mt-2 text-sm text-[#9090A8]">{`${rz(det.watchlistRow, 'name') ?? ''}`}</p>
         </div>
       </div>
 
@@ -126,7 +191,13 @@ export function PositionDetail() {
               <div>
                 <dt className="text-[#505068]">Exchange</dt>
 
-                <dd className="mt-1 text-[#4DB8FF]">{`${rz(det.position, 'exchange_short_name') ?? '—'}`}</dd>
+                <dd className="mt-1 text-[#4DB8FF]">{`${rz(det.watchlistRow, 'exchange_short_name') ?? '—'}`}</dd>
+              </div>
+
+              <div>
+                <dt className="text-[#505068]">Asset class</dt>
+
+                <dd className="mt-1">{`${rz(det.watchlistRow, 'asset_class') ?? '—'}`.replace(/_/g, ' ') || '—'}</dd>
               </div>
 
               <div>
@@ -136,15 +207,9 @@ export function PositionDetail() {
               </div>
 
               <div>
-                <dt className="text-[#505068]">Framework (latest)</dt>
+                <dt className="text-[#505068]">Auto-monitor</dt>
 
-                <dd className="mt-1">{det.scorecardFull ? `${rz(det.scorecardFull, 'framework') ?? ''}` : '—'}</dd>
-              </div>
-
-              <div>
-                <dt className="text-[#505068]">Score</dt>
-
-                <dd className="mt-1 text-[#4DB8FF]">{overall != null ? `${overall.toFixed(1)}%` : '—'}</dd>
+                <dd className="mt-1">{rz(det.watchlistRow, 'auto_monitor') === true ? 'On' : 'Off'}</dd>
               </div>
             </dl>
 
@@ -153,10 +218,22 @@ export function PositionDetail() {
             )}
           </div>
 
-          {!awaiting ? (
-            <p className="text-xs text-[#505068]">Use the Scorecard tab for checklist overrides and version history.</p>
-          ) : (
-            <p className="text-xs text-[#F59E0B]">This position still needs scoring — open Scorecard.</p>
+          {!descStr ? null : (
+            <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Company description (FMP)</p>
+
+              <p className="mt-4 text-xs leading-relaxed text-[#B8B8C8]">{descStr}</p>
+            </div>
+          )}
+
+          {!fmpMetrics ? null : (
+            <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4 font-mono text-[10px] text-[#505068]">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Cached fundamentals</p>
+
+              <pre className="mt-3 max-h-[220px] overflow-auto rounded-lg bg-[#0A0A0F] p-3 text-[10px] text-[#C8C8D8]">
+                {JSON.stringify(fmpMetrics, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       ) : null}
@@ -170,15 +247,9 @@ export function PositionDetail() {
               <dt className="text-[#505068]">Last (native)</dt>
 
               <dd>
-                {native != null ? `${native.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${cur}` : '—'}
-
-                {det.showAudParenthetical && aud != null ? (
-                  <span className="text-xs text-[#505068]">
-                    {' '}
-                    (
-                    {aud.toLocaleString('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2 })})
-                  </span>
-                ) : null}
+                {nativeDisplay != null
+                  ? `${nativeDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${cur}`
+                  : '—'}
               </dd>
             </div>
 
@@ -200,6 +271,8 @@ export function PositionDetail() {
               </dd>
             </div>
           </dl>
+
+          {!quote ? <p className="mt-4 text-[11px] text-[#505068]">Live quote fetched on demand via Yahoo/FMP fallback.</p> : null}
         </section>
       ) : null}
 
@@ -256,8 +329,8 @@ export function PositionDetail() {
           </div>
 
           <ScoringWorkbench
-            positionId={`${id}`}
-            position={det.position}
+            watchlistItemId={`${id}`}
+            position={det.watchlistRow}
             selectedVersionId={det.selectedVersionId}
             scorecardFull={det.scorecardFull}
             versionManifest={det.versionManifest}

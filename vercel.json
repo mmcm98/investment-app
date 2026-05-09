@@ -1,10 +1,10 @@
 {
   "functions": {
-    "api/**/*.js": {
+    "api/market/batch.js": {
       "memory": 1024,
       "maxDuration": 60
     },
-    "api/analysis/triad.js": {
+    "api/analysis/*.js": {
       "memory": 1024,
       "maxDuration": 120
     }

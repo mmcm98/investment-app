@@ -11,8 +11,11 @@ function rz(p, k) {
 }
 
 /**
+ * Exactly one analysis parent id should be set (`positionId` or `watchlistItemId`).
+ *
  * @param {{
- *   positionId: string,
+ *   positionId?: string|null,
+ *   watchlistItemId?: string|null,
  *   position: Record<string, unknown>|null,
  *   selectedVersionId: string|null,
  *   scorecardFull: Record<string, unknown>|null,
@@ -21,7 +24,8 @@ function rz(p, k) {
  * }} props
  */
 export function ScoringWorkbench({
-  positionId,
+  positionId = null,
+  watchlistItemId = null,
   position,
   selectedVersionId,
   scorecardFull,
@@ -29,6 +33,8 @@ export function ScoringWorkbench({
   refreshDetail,
 }) {
   const { supabase } = useSharesightIntegration()
+
+  const analysisParentId = `${positionId ?? ''}`.trim() || `${watchlistItemId ?? ''}`.trim()
 
   const awaiting = position ? Boolean(rz(position, 'awaiting_analysis')) : false
 
@@ -67,7 +73,7 @@ export function ScoringWorkbench({
 
   useEffect(() => {
     autoSuggestDone.current = false
-  }, [positionId])
+  }, [analysisParentId])
 
   const [phase, setPhase] = useState(
     /** @type {'idle'|'suggesting'|'await_confirm'|'running'|'error'} */ ('idle'),
@@ -145,7 +151,12 @@ export function ScoringWorkbench({
     }
 
     try {
-      const out = await postTriadAnalysis({ step: 'suggest-framework', positionId }, sess)
+      const payload =
+        positionId != null && `${positionId}`.trim()
+          ? { step: 'suggest-framework', positionId: `${positionId}`.trim() }
+          : { step: 'suggest-framework', watchlistItemId: `${watchlistItemId ?? ''}`.trim() }
+
+      const out = await postTriadAnalysis(payload, sess)
 
       if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
         throw new Error('Unexpected suggest response')
@@ -159,7 +170,7 @@ export function ScoringWorkbench({
       setPhase('error')
       setErrorText(e instanceof Error ? e.message : String(e))
     }
-  }, [fetchSession, positionId])
+  }, [fetchSession, positionId, watchlistItemId])
 
   useEffect(() => {
     const needsSuggest = Boolean(position) && (versionManifest.length === 0 || awaiting)
@@ -202,10 +213,20 @@ export function ScoringWorkbench({
       }
 
       try {
-        const out = await postTriadAnalysis(
-          { step: 'run-analysis', positionId, confirmedFrameworkKey: frameworkKey },
-          sess,
-        )
+        const runPayload =
+          positionId != null && `${positionId}`.trim()
+            ? {
+                step: 'run-analysis',
+                positionId: `${positionId}`.trim(),
+                confirmedFrameworkKey: frameworkKey,
+              }
+            : {
+                step: 'run-analysis',
+                watchlistItemId: `${watchlistItemId ?? ''}`.trim(),
+                confirmedFrameworkKey: frameworkKey,
+              }
+
+        const out = await postTriadAnalysis(runPayload, sess)
 
         if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
           throw new Error('Analysis did not complete')
@@ -219,10 +240,14 @@ export function ScoringWorkbench({
         setErrorText(e instanceof Error ? e.message : String(e))
       }
     },
-    [fetchSession, positionId, refreshDetail],
+    [fetchSession, positionId, watchlistItemId, refreshDetail],
   )
 
   const suggestedKey = suggestion && typeof rz(suggestion, 'framework_key') === 'string' ? String(rz(suggestion, 'framework_key')) : ''
+
+  if (!analysisParentId) {
+    return null
+  }
 
   return (
     <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4">

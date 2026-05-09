@@ -1,15 +1,11 @@
 /**
- * Exactly one parent id (`positionId` or `watchlistItemId`).
+ * On-demand Gemini Flash announcement sweep for a watchlist row.
  *
- * @typedef {{ step: string, positionId?: string, watchlistItemId?: string }} TriadSuggestBody
- * @typedef {TriadSuggestBody & { confirmedFrameworkKey: string, forceRefreshGemini?: boolean }} TriadRunBody
- */
-
-/**
- * @param {TriadSuggestBody | TriadRunBody} body
+ * @param {{ watchlistItemId: string }} body
  * @param {{ accessToken: string }} session
  */
-export async function postTriadAnalysis(body, session) {
+
+export async function postWatchlistFlash(body, session) {
   const secret = `${import.meta.env.VITE_ANALYSIS_API_SECRET ?? ''}`.trim()
 
   /** @type {Record<string, string>} */
@@ -20,7 +16,7 @@ export async function postTriadAnalysis(body, session) {
 
   if (secret) headers['x-analysis-secret'] = secret
 
-  const res = await fetch('/api/analysis/triad', {
+  const res = await fetch('/api/analysis/watchlist-flash', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -29,12 +25,13 @@ export async function postTriadAnalysis(body, session) {
   const text = await res.text()
 
   /** @type {unknown} */
+
   let json
 
   try {
     json = text.trim() ? JSON.parse(text) : null
   } catch {
-    throw new Error(`Triad API returned non-JSON (${res.status})`)
+    throw new Error(`Watchlist Flash API returned non-JSON (${res.status})`)
   }
 
   if (!res.ok) {

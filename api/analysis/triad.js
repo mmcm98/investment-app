@@ -15,12 +15,13 @@ import {
   geminiPayloadFromRow,
   parseJsonFromModel,
 } from './_lib/orchestratorHelpers.mjs'
+import { assertGlobalApiNotPaused } from './_lib/globalApiPause.mjs'
 
 function readNodeEnv() {
   return typeof process !== 'undefined' && process.env ? process.env : {}
 }
 
-function tickerTagFromPosition(pos) {
+function tickerTagFromRow(pos) {
   const t = String(pos.display_ticker || pos.fmp_symbol || '').trim().toUpperCase()
   return t || 'UNKNOWN'
 }
@@ -48,18 +49,6 @@ async function userVersionCap(supabase, userId) {
   return 10
 }
 
-async function assertNotPaused(supabase, userId) {
-  const { data } = await supabase.from('user_settings').select('global_api_pause').eq('user_id', userId).maybeSingle()
-
-  if (data?.global_api_pause === true) {
-    const e = new Error('global_api_pause')
-
-    e.code = 'api_paused'
-
-    throw e
-  }
-}
-
 async function loadPosition(supabase, positionId, userId) {
   const { data, error } = await supabase
     .from('positions')
@@ -72,6 +61,28 @@ async function loadPosition(supabase, positionId, userId) {
 
   if (!data) {
     const e = new Error('position_not_found')
+
+    e.code = 'not_found'
+
+    throw e
+  }
+
+  return data
+}
+
+async function loadWatchlistItem(supabase, watchlistItemId, userId) {
+  const { data, error } = await supabase
+    .from('watchlist_items')
+    .select('*')
+    .eq('id', watchlistItemId)
+    .eq('user_id', userId)
+    .eq('archived', false)
+    .maybeSingle()
+
+  if (error) throw error
+
+  if (!data) {
+    const e = new Error('watchlist_item_not_found')
 
     e.code = 'not_found'
 
@@ -100,6 +111,52 @@ async function pruneVersions(supabase, userId, positionId, cap) {
 
     if (dErr) throw dErr
   }
+}
+
+async function pruneVersionsWatchlist(supabase, userId, watchlistItemId, cap) {
+  const { data: rows, error } = await supabase
+    .from('scorecard_versions')
+    .select('id, version_number')
+    .eq('user_id', userId)
+    .eq('watchlist_item_id', watchlistItemId)
+    .order('version_number', { ascending: true })
+
+  if (error) throw error
+
+  if (!rows?.length || rows.length < cap) return
+
+  const toDrop = rows.length - cap + 1
+
+  for (let i = 0; i < toDrop; i++) {
+    const { error: dErr } = await supabase.from('scorecard_versions').delete().eq('id', rows[i].id)
+
+    if (dErr) throw dErr
+  }
+}
+
+/**
+ * Exactly one parent id allowed.
+ *
+ * @param {Record<string, unknown>} body
+ * @returns {{ kind: 'position' | 'watchlist', id: string } | null}
+ */
+function resolveAnalysisParent(body) {
+  const pid = typeof body.positionId === 'string' ? body.positionId.trim() : ''
+  const wid = typeof body.watchlistItemId === 'string' ? body.watchlistItemId.trim() : ''
+
+  if (pid && wid) return null
+  if (pid) return { kind: 'position', id: pid }
+  if (wid) return { kind: 'watchlist', id: wid }
+
+  return null
+}
+
+async function loadAnalysisRow(supabase, userId, parent) {
+  if (parent.kind === 'position') {
+    return { kind: /** @type {const} */ ('position'), row: await loadPosition(supabase, parent.id, userId) }
+  }
+
+  return { kind: /** @type {const} */ ('watchlist'), row: await loadWatchlistItem(supabase, parent.id, userId) }
 }
 
 async function resolveGeminiJson({ supabase, userId, canonicalKey, tickerTag, pos, cfg, forceRefresh }) {
@@ -186,18 +243,20 @@ async function resolveGeminiJson({ supabase, userId, canonicalKey, tickerTag, po
   return { gemini: parsed, source: 'gemini_live', researchLogId: inserted.id }
 }
 
-async function runSuggestFramework(cfg, supabase, userId, positionId) {
-  await assertNotPaused(supabase, userId)
+async function runSuggestFramework(cfg, supabase, userId, parent) {
+  await assertGlobalApiNotPaused(supabase, userId)
 
   if (!cfg.anthropicApiKey) return { ok: false, code: 'missing_key', message: 'ANTHROPIC_API_KEY' }
 
-  const pos = await loadPosition(supabase, positionId, userId)
+  const { row: pos } = await loadAnalysisRow(supabase, userId, parent)
 
   const fmp = await fetchFmpFundamentalsSnapshot(String(pos.fmp_symbol), cfg.fmpApiKey)
 
   const client = new Anthropic({ apiKey: cfg.anthropicApiKey })
 
   const list = FRAMEWORK_KEYS.map((k) => `- ${k}: ${frameworkLabel(k)}`).join('\n')
+
+  const assetClass = typeof pos.asset_class === 'string' ? pos.asset_class : null
 
   const msg = await client.messages.create({
     model: cfg.claudeModel,
@@ -209,7 +268,7 @@ async function runSuggestFramework(cfg, supabase, userId, positionId) {
           'Pick one framework_key from the list.',
           list,
           'framework_key MUST be exactly one enum string.',
-          `Position: ${JSON.stringify({ name: pos.name, fmp_symbol: pos.fmp_symbol, exchange: pos.exchange_short_name, currency: pos.currency })}`,
+          `Instrument: ${JSON.stringify({ name: pos.name, fmp_symbol: pos.fmp_symbol, exchange: pos.exchange_short_name, currency: pos.currency ?? null, asset_class: assetClass })}`,
           fmp ? `FMP profile snippet: ${JSON.stringify(fmp)}` : '',
           'Reply JSON ONLY: {"framework_key":string,"reason":string} reason max ~400 chars.',
         ]
@@ -238,8 +297,11 @@ async function runSuggestFramework(cfg, supabase, userId, positionId) {
   }
 }
 
-async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrameworkKey, forceRefreshGemini) {
-  await assertNotPaused(supabase, userId)
+/**
+ * @param {{ kind: 'position' | 'watchlist', id: string }} parent
+ */
+async function runFullAnalysis(cfg, supabase, userId, parent, confirmedFrameworkKey, forceRefreshGemini) {
+  await assertGlobalApiNotPaused(supabase, userId)
 
   const fkIn = normalizeFrameworkKey(confirmedFrameworkKey)
 
@@ -249,9 +311,9 @@ async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrame
 
   if (!cfg.anthropicApiKey) return { ok: false, code: 'missing_key', message: 'ANTHROPIC_API_KEY' }
 
-  const pos = await loadPosition(supabase, positionId, userId)
+  const { row: pos } = await loadAnalysisRow(supabase, userId, parent)
 
-  const tag = tickerTagFromPosition(pos)
+  const tag = tickerTagFromRow(pos)
 
   const canKey = canonicalSymbolKey(String(pos.exchange_short_name), String(pos.fmp_symbol))
 
@@ -272,16 +334,35 @@ async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrame
 
     const cap = await userVersionCap(supabase, userId)
 
-    await pruneVersions(supabase, userId, positionId, cap)
+    if (parent.kind === 'position') {
+      await pruneVersions(supabase, userId, parent.id, cap)
+    } else {
+      await pruneVersionsWatchlist(supabase, userId, parent.id, cap)
+    }
 
-    const { data: maxRow } = await supabase
-      .from('scorecard_versions')
-      .select('version_number')
-      .eq('position_id', positionId)
-      .eq('user_id', userId)
-      .order('version_number', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const maxQ =
+      parent.kind === 'position'
+        ? await supabase
+            .from('scorecard_versions')
+            .select('version_number')
+            .eq('position_id', parent.id)
+            .eq('user_id', userId)
+            .order('version_number', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : await supabase
+            .from('scorecard_versions')
+            .select('version_number')
+            .eq('watchlist_item_id', parent.id)
+            .eq('user_id', userId)
+            .order('version_number', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+    const maxRow = maxQ.data
+    const maxErr = maxQ.error
+
+    if (maxErr) throw maxErr
 
     const nextV = Number.isFinite(Number(maxRow?.version_number)) ? Number(maxRow.version_number) + 1 : 1
 
@@ -295,14 +376,21 @@ async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrame
       },
     ]
 
+    const currencyVal = Reflect.get(pos, 'currency')
+
+    const assetClassHint = typeof pos.asset_class === 'string' ? pos.asset_class : null
+
     const userText = [
       `Active framework_key: ${fkIn} (${frameworkLabel(fkIn)}).`,
       'Use this framework only. Produce checklist item count: 60 if regular_stocks else 40.',
+      assetClassHint ? `User-declared asset_class for this instrument: ${assetClassHint}. Reflect this in framing where relevant.` : '',
       `Gemini JSON:\n${JSON.stringify(gemBundle.gemini)}`,
       `FMP snapshot:\n${JSON.stringify(fmpSnap ?? {})}`,
-      `Position meta:\n${JSON.stringify({ currency: pos.currency, yahoo_symbol: pos.yahoo_symbol, name: pos.name })}`,
+      `Instrument meta:\n${JSON.stringify({ currency: currencyVal ?? null, yahoo_symbol: pos.yahoo_symbol, name: pos.name })}`,
       'Return ONLY the scorecard JSON matching RESPONSE_SCHEMA_HINT.',
-    ].join('\n\n')
+    ]
+      .filter(Boolean)
+      .join('\n\n')
 
     const claudeMsg = await client.messages.create({
       model: cfg.claudeModel,
@@ -326,19 +414,17 @@ async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrame
         ? scorecardJson.research_paper_outline
         : { sections: [] }
 
-    const { data: insertedSc, error: scErr } = await supabase
-      .from('scorecard_versions')
-      .insert({
-        user_id: userId,
-        position_id: positionId,
-        version_number: nextV,
-        framework: fkIn,
-        overall_score: Number.isFinite(overall) ? overall : null,
-        payload: scorecardJson,
-        generated_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single()
+    const insertSc = /** @type {Record<string, unknown>} */ ({
+      user_id: userId,
+      version_number: nextV,
+      framework: fkIn,
+      overall_score: Number.isFinite(overall) ? overall : null,
+      payload: scorecardJson,
+      generated_at: new Date().toISOString(),
+      ...(parent.kind === 'position' ? { position_id: parent.id } : { watchlist_item_id: parent.id }),
+    })
+
+    const { data: insertedSc, error: scErr } = await supabase.from('scorecard_versions').insert(insertSc).select('id').single()
 
     if (scErr) throw scErr
 
@@ -353,23 +439,39 @@ async function runFullAnalysis(cfg, supabase, userId, positionId, confirmedFrame
 
     if (rpErr) throw rpErr
 
-    const extra = pos.extra && typeof pos.extra === 'object' ? { ...pos.extra } : {}
+    const extraBase = pos.extra && typeof pos.extra === 'object' ? { .../** @type {Record<string, unknown>} */ (pos.extra) } : {}
 
-    if (synopsis) extra.synopsis = synopsis
+    if (synopsis) extraBase.synopsis = synopsis
 
-    const { error: posErr } = await supabase
-      .from('positions')
-      .update({
-        awaiting_analysis: false,
-        buy_zones: buyZones,
-        exit_triggers: exits,
-        extra,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', positionId)
-      .eq('user_id', userId)
+    if (parent.kind === 'position') {
+      const { error: posErr } = await supabase
+        .from('positions')
+        .update({
+          awaiting_analysis: false,
+          buy_zones: buyZones,
+          exit_triggers: exits,
+          extra: extraBase,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', parent.id)
+        .eq('user_id', userId)
 
-    if (posErr) throw posErr
+      if (posErr) throw posErr
+    } else {
+      const { error: wlErr } = await supabase
+        .from('watchlist_items')
+        .update({
+          awaiting_analysis: false,
+          buy_zones: buyZones,
+          exit_triggers: exits,
+          extra: extraBase,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', parent.id)
+        .eq('user_id', userId)
+
+      if (wlErr) throw wlErr
+    }
 
     if (researchLogId) {
       await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
@@ -415,23 +517,18 @@ async function dispatch(body, env, authHeader) {
 
   const step = typeof body.step === 'string' ? body.step.trim() : ''
 
-  const positionId = typeof body.positionId === 'string' ? body.positionId.trim() : ''
+  const parent = resolveAnalysisParent(body ?? {})
 
-  if (!positionId) return { ok: false, code: 'bad_request', message: 'positionId required' }
+  if (!parent) {
+    return { ok: false, code: 'bad_request', message: 'Exactly one of positionId or watchlistItemId required' }
+  }
 
   if (step === 'suggest-framework') {
-    return await runSuggestFramework(cfg, supabase, userId, positionId)
+    return await runSuggestFramework(cfg, supabase, userId, parent)
   }
 
   if (step === 'run-analysis') {
-    return await runFullAnalysis(
-      cfg,
-      supabase,
-      userId,
-      positionId,
-      body.confirmedFrameworkKey,
-      body.forceRefreshGemini === true,
-    )
+    return await runFullAnalysis(cfg, supabase, userId, parent, body.confirmedFrameworkKey, body.forceRefreshGemini === true)
   }
 
   return { ok: false, code: 'bad_request', message: 'unknown step' }
