@@ -73,16 +73,25 @@ function pctFromFirst(pointsByDay, datesSorted) {
  * perfSat: PerfPoint[]|null,
  * totalCashAud: number,
  * unrealisedAud: number,
+ * initialBenchSymbol?: string | null,
+ * preferredPeriod?: string | null,
  * }} props
  */
-export function PortfolioTrendChart({ perfTotal, perfCore, perfSat, totalCashAud, unrealisedAud }) {
-  const [period, setPeriod] = useState(/** @type {(typeof PERIODS)[number]} */ ('1Y'))
+export function PortfolioTrendChart({ perfTotal, perfCore, perfSat, totalCashAud, unrealisedAud, initialBenchSymbol, preferredPeriod }) {
+  const initialPeriod =
+    preferredPeriod && typeof preferredPeriod === 'string' && PERIODS.includes(/** @type {(typeof PERIODS)[number]} */ (preferredPeriod))
+      ? /** @type {(typeof PERIODS)[number]} */ (preferredPeriod)
+      : '1Y'
+
+  const [period, setPeriod] = useState(/** @type {(typeof PERIODS)[number]} */ (initialPeriod))
 
   const [scale, setScale] = useState(/** @type {'aud'|'pct'} */ ('aud'))
 
-  const [benchSymbol, setBenchSymbol] = useState(DEFAULT_BENCH)
+  const benchInit = typeof initialBenchSymbol === 'string' && initialBenchSymbol.trim() ? initialBenchSymbol.trim() : DEFAULT_BENCH
 
-  const [benchDraft, setBenchDraft] = useState(DEFAULT_BENCH)
+  const [benchSymbol, setBenchSymbol] = useState(benchInit)
+
+  const [benchDraft, setBenchDraft] = useState(benchInit)
 
   const [searchQ, setSearchQ] = useState('')
 

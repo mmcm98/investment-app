@@ -11,6 +11,7 @@ import { DashboardSatelliteStrip, DashboardWatchPanel } from '../components/dash
 import { PortfolioBalanceSnapshot } from '../components/dashboard/PortfolioBalanceSnapshot.jsx'
 import { PortfolioBriefingPanel } from '../components/dashboard/PortfolioBriefingPanel.jsx'
 import { DcaWidget } from '../components/DcaWidget.jsx'
+import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
 
 export function DashboardHome() {
   const navigate = useNavigate()
@@ -40,6 +41,20 @@ export function DashboardHome() {
         : null,
     [dash.perfTotalMerged],
   )
+
+  const settingsPrefs = useMemo(() => mergeUserPreferences(dash.settingsRow?.preferences), [dash.settingsRow?.preferences])
+
+  const defaultBench =
+
+    typeof settingsPrefs.benchmarks?.default_symbol === 'string' && settingsPrefs.benchmarks.default_symbol.trim()
+
+      ? settingsPrefs.benchmarks.default_symbol.trim()
+
+      : undefined
+
+  const prefChartPeriod =
+
+    typeof settingsPrefs.appearance?.preferred_chart_period === 'string' ? settingsPrefs.appearance.preferred_chart_period : undefined
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-4 pb-8 text-[#F0F0F8] lg:px-10">
@@ -78,15 +93,6 @@ export function DashboardHome() {
           </button>
         </div>
       </header>
-
-      {dash.settingsRow?.global_api_pause === true ? (
-        <div className="rounded-lg border border-[rgba(239,68,68,0.45)] bg-[rgba(239,68,68,0.09)] px-4 py-3 text-sm text-[#EF4444]">
-          API pause is enabled — analysis, watchlist Flash, and portfolio briefing generation are suspended until you unset{' '}
-
-          <span className="font-mono text-[11px]">global_api_pause</span> in <span className="font-mono text-[11px]">user_settings</span>.
-
-        </div>
-      ) : null}
 
       {(ss.surfaceError ?? ss.lastSyncError) && holdingsPresent(ss.holdingsCount) ? (
         <div className="rounded-lg border border-[rgba(245,158,11,0.35)] bg-[rgba(245,158,11,0.08)] px-4 py-3">
@@ -148,13 +154,22 @@ export function DashboardHome() {
       />
 
       <PortfolioTrendChart
+
+        key={`chart-${`${dash.settingsRow?.updated_at ?? 'na'}`.slice(0, 24)}-${defaultBench ?? ''}-${prefChartPeriod ?? ''}`}
+
         perfTotal={perfTotal}
+
         perfCore={perfCore}
+
         perfSat={perfSat}
 
         totalCashAud={dash.totalCashAud}
 
         unrealisedAud={dash.unrealisedAud}
+
+        initialBenchSymbol={defaultBench}
+
+        preferredPeriod={prefChartPeriod}
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

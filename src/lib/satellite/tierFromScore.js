@@ -2,15 +2,20 @@
  * Universal satellite tier labels (guidance) — CLAUDE.md scoring thresholds.
  *
  * @param {number | null | undefined} overallScore
+ * @param {{ buyZoneUnlockThreshold?: number, highConvictionThreshold?: number }} [opts]
  */
-export function universalTierFromScore(overallScore) {
+export function universalTierFromScore(overallScore, opts) {
   if (overallScore == null || !Number.isFinite(Number(overallScore))) return null
 
   const s = Number(overallScore)
 
-  if (s >= 78) return 'High conviction'
+  const high = opts?.highConvictionThreshold ?? 78
 
-  if (s >= 65) return 'Qualified'
+  const gate = opts?.buyZoneUnlockThreshold ?? 65
+
+  if (s >= high) return 'High conviction'
+
+  if (s >= gate) return 'Qualified'
 
   return 'Haircut'
 }

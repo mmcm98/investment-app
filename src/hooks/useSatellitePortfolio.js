@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useLivePrices } from '../context/LivePricesContext.jsx'
+import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
 import { computeSatelliteTargetAllocations } from '../lib/satellite/allocationEngine.js'
 import { isCashLikeHolding, numOrNull } from '../lib/satellite/satelliteMerge.js'
 import { universalTierFromScore } from '../lib/satellite/tierFromScore.js'
@@ -154,7 +155,53 @@ export function useSatellitePortfolio() {
     }
   }, [supabase, userPresent, holdingsCount, reload])
 
-  const showAudPar = useMemo(() => satelliteShowAudParenthetical(settingsRow?.preferences), [settingsRow])
+  const mergedPrefs = useMemo(() => mergeUserPreferences(settingsRow?.preferences), [settingsRow?.preferences])
+
+  const showAudPar = useMemo(
+    () => Reflect.get(mergedPrefs, 'satellite_show_aud_parenthetical') === true,
+    [mergedPrefs],
+  )
+
+  const allocRuleOpts = useMemo(() => {
+    const r = Reflect.get(mergedPrefs, 'satellite_allocation_rules')
+
+    if (!r || typeof r !== 'object') return undefined
+
+    const o = /** @type {Record<string, unknown>} */ (r)
+
+    const ht = Number(o.haircut_threshold)
+
+    const hm = Number(o.haircut_multiplier)
+
+    /** @type {{ haircut_threshold?: number, haircut_multiplier?: number }} */
+
+    const out = {}
+
+    if (Number.isFinite(ht)) Reflect.set(out, 'haircut_threshold', ht)
+
+    if (Number.isFinite(hm)) Reflect.set(out, 'haircut_multiplier', hm)
+
+    return Object.keys(out).length ? out : undefined
+  }, [mergedPrefs])
+
+  const tierOpts = useMemo(() => {
+    const r = Reflect.get(mergedPrefs, 'satellite_allocation_rules')
+
+    const s = Reflect.get(mergedPrefs, 'scoring')
+
+    const buy = r && typeof r === 'object' ? Number(Reflect.get(/** @type {Record<string, unknown>} */ (r), 'buy_zone_unlock_threshold')) : Number.NaN
+
+    const hi = s && typeof s === 'object' ? Number(Reflect.get(/** @type {Record<string, unknown>} */ (s), 'high_conviction_tier_pct')) : Number.NaN
+
+    const rebal = r && typeof r === 'object' ? Number(Reflect.get(/** @type {Record<string, unknown>} */ (r), 'rebalance_trigger_pct')) : Number.NaN
+
+    return {
+      buyZoneUnlockThreshold: Number.isFinite(buy) ? buy : 65,
+      highConvictionThreshold: Number.isFinite(hi) ? hi : 78,
+      rebalanceTriggerPct: Number.isFinite(rebal) ? rebal : 10,
+    }
+  }, [mergedPrefs])
+
   const latestScores = useMemo(() => collapseLatestScorecardsByPosition(scoreRows), [scoreRows])
 
   const overrideByPid = useMemo(() => {
@@ -211,7 +258,7 @@ export function useSatellitePortfolio() {
       }
     })
 
-    const { targetsByPositionId, sumOverrides, remainderValid } = computeSatelliteTargetAllocations(allocEntries)
+    const { targetsByPositionId, sumOverrides, remainderValid } = computeSatelliteTargetAllocations(allocEntries, allocRuleOpts)
 
     /** @typedef {typeof rows[number] & {
      * ticker: string, displayName: string, synopsis: string, assetClass: string|null, overallScore: number|null,
@@ -242,7 +289,10 @@ export function useSatellitePortfolio() {
       const hasScorecard = Boolean(sc)
       const awaitingAnalysis = !pos || awaiting || !hasScorecard
 
-      const tier = universalTierFromScore(overallScore)
+      const tier = universalTierFromScore(overallScore, {
+        buyZoneUnlockThreshold: tierOpts.buyZoneUnlockThreshold,
+        highConvictionThreshold: tierOpts.highConvictionThreshold,
+      })
 
       const payloadRaw = sc ? Reflect.get(sc, 'payload') : null
       const synopsis =
@@ -266,6 +316,9 @@ export function useSatellitePortfolio() {
 
       const driftPct = actualWeightPct != null && targetGuidancePct != null ? actualWeightPct - targetGuidancePct : null
 
+      const rebalanceSuggested =
+        driftPct != null && Number.isFinite(driftPct) && Math.abs(driftPct) >= tierOpts.rebalanceTriggerPct
+
       const ov = pid ? overrideByPid[pid] : null
       const allocationOverridePct = ov && Reflect.get(ov, 'active') ? numOrNull(Reflect.get(ov, 'target_pct')) : null
       const allocationOverrideNote = ov && typeof Reflect.get(ov, 'note') === 'string' ? `${Reflect.get(ov, 'note')}` : null
@@ -282,6 +335,7 @@ export function useSatellitePortfolio() {
         targetGuidancePct,
         actualWeightPct,
         driftPct,
+        rebalanceSuggested,
         mergedQuote,
         showAudPar,
         allocationOverridePct,
@@ -291,7 +345,7 @@ export function useSatellitePortfolio() {
     })
 
     return { cards, targetsByPositionId, sumOverrides, remainderValid, totalMv }
-  }, [holdings, positions, latestScores, mergedRows, totalMv, overrideByPid, showAudPar])
+  }, [holdings, positions, latestScores, mergedRows, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
 
   const setPrefShowAud = useCallback(
     async (v) => {
