@@ -11,6 +11,12 @@ import { satelliteShowAudParenthetical } from './useSatellitePortfolio.js'
 export function usePositionDetail(positionId) {
   const { supabase, userPresent } = useSharesightIntegration()
 
+  const [reloadToken, setReloadToken] = useState(0)
+
+  const refreshDetail = useCallback(() => {
+    setReloadToken((n) => n + 1)
+  }, [])
+
   const [position, setPosition] = useState(/** @type {Record<string, unknown>|null} */ (null))
   const [versionManifest, setVersionManifest] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   /** @type {[string|null, import('react').Dispatch<import('react').SetStateAction<string|null>>]} */
@@ -82,7 +88,7 @@ export function usePositionDetail(positionId) {
     return () => {
       cancelled = true
     }
-  }, [supabase, userPresent, positionId])
+  }, [supabase, userPresent, positionId, reloadToken])
 
   const loadVersion = useCallback(
     async (versionUuid) => {
@@ -122,5 +128,6 @@ export function usePositionDetail(positionId) {
     showAudParenthetical: showAudParen,
     loadError,
     versionLoadError,
+    refreshDetail,
   }
 }

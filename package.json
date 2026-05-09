@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:market-api": "node server/dev-market-api.mjs",
+    "dev:analysis-api": "node server/dev-analysis-api.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -14,6 +15,8 @@
     "node": "22.x"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@google/generative-ai": "^0.24.1",
     "@shadcn/ui": "^0.0.4",
     "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.3.0",

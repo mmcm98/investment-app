@@ -4,6 +4,7 @@ import { useLivePrices } from '../context/LivePricesContext.jsx'
 import { usePositionDetail } from '../hooks/usePositionDetail.js'
 import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
 import { numOrNull } from '../lib/satellite/satelliteMerge.js'
+import { ScoringWorkbench } from '../components/analysis/ScoringWorkbench.jsx'
 
 /** @param {Record<string, unknown>|null} p */
 /** @returns {unknown} */
@@ -110,6 +111,15 @@ export function PositionDetail() {
         </div>
       </div>
 
+      <ScoringWorkbench
+        positionId={`${id}`}
+        position={det.position}
+        selectedVersionId={det.selectedVersionId}
+        scorecardFull={det.scorecardFull}
+        versionManifest={det.versionManifest}
+        refreshDetail={det.refreshDetail}
+      />
+
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Live data</p>
@@ -152,7 +162,7 @@ export function PositionDetail() {
         </div>
 
         <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Scorecard</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Scorecard payload (raw)</p>
 
           {det.scorecardFull ? (
             <div className="mt-4 space-y-2 text-xs text-[#9090A8]">

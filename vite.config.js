@@ -20,6 +20,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/market/batch',
       },
+      '/api/analysis/triad': {
+        target: 'http://127.0.0.1:8791',
+        changeOrigin: true,
+        rewrite: () => '/analysis/triad',
+      },
     },
   },
 })

@@ -3,6 +3,10 @@
     "api/**/*.js": {
       "memory": 1024,
       "maxDuration": 60
+    },
+    "api/analysis/triad.js": {
+      "memory": 1024,
+      "maxDuration": 120
     }
   },
   "rewrites": [
