@@ -20,8 +20,12 @@ const SharesightIntegrationContext = createContext(null)
 
 /** @typedef {{ children: import('react').ReactNode }} Props */
 
+/** @typedef {import('@supabase/supabase-js').SupabaseClient | null} SupabaseClientMaybe */
+
 /** @typedef {{
+ *   supabase: SupabaseClientMaybe
  *   supabaseConfigured: boolean
+ *   authReady: boolean
  *   userPresent: boolean
  *   oauthRow: SharesightOAuthRow
  *   reconnectRequired: boolean
@@ -35,6 +39,7 @@ const SharesightIntegrationContext = createContext(null)
  *   connectSharesight: () => void
  *   refreshSharesightNow: () => Promise<void>
  *   reloadLocalSnapshot: () => Promise<void>
+ *   signOut: () => Promise<void>
  * }} SharesightIntegrationValue */
 
 function formatUnknownError(error) {
@@ -52,6 +57,8 @@ function formatUnknownError(error) {
 /** @param {Props} props */
 export function SharesightIntegrationProvider({ children }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
+
+  const [authReady, setAuthReady] = useState(false)
 
   /** @type {import('@supabase/supabase-js').Session | null} */
   const [session, setSession] = useState(null)
@@ -117,23 +124,30 @@ export function SharesightIntegrationProvider({ children }) {
 
     let mounted = true
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return
 
-      const nextSession = data.session ?? null
+        const nextSession = data.session ?? null
 
-      setSession(nextSession)
+        setSession(nextSession)
 
-      if (!nextSession?.user?.id) {
-        setOauthRow(null)
-        setHoldingsCount(null)
-        didInitialSyncRef.current = false
+        if (!nextSession?.user?.id) {
+          setOauthRow(null)
+          setHoldingsCount(null)
+          didInitialSyncRef.current = false
 
-        return
-      }
+          return
+        }
 
-      void reloadLocalSnapshot()
-    })
+        void reloadLocalSnapshot()
+      })
+      .finally(() => {
+        if (!mounted) return
+
+        setAuthReady(true)
+      })
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       const normalized = nextSession ?? null
@@ -236,6 +250,14 @@ export function SharesightIntegrationProvider({ children }) {
     await runSync('manual')
   }, [runSync])
 
+  const signOut = useCallback(async () => {
+    if (!supabase) return
+
+    setSurfaceError(null)
+
+    await supabase.auth.signOut()
+  }, [supabase])
+
   /** @type {SharesightIntegrationValue} */
   const value = useMemo(() => {
     const lastSuccessMs = oauthRow?.last_successful_sync_at ? Date.parse(oauthRow.last_successful_sync_at) : NaN
@@ -243,7 +265,9 @@ export function SharesightIntegrationProvider({ children }) {
       Number.isFinite(lastSuccessMs) && freshnessClock - lastSuccessMs > 31 * 60 * 1000
 
     return {
+      supabase,
       supabaseConfigured,
+      authReady,
       userPresent,
       oauthRow,
       reconnectRequired,
@@ -257,8 +281,10 @@ export function SharesightIntegrationProvider({ children }) {
       connectSharesight,
       refreshSharesightNow,
       reloadLocalSnapshot,
+      signOut,
     }
   }, [
+    authReady,
     connectSharesight,
     freshnessClock,
     holdingsCount,
@@ -267,6 +293,8 @@ export function SharesightIntegrationProvider({ children }) {
     reconnectRequired,
     refreshSharesightNow,
     reloadLocalSnapshot,
+    signOut,
+    supabase,
     surfaceError,
     supabaseConfigured,
     userPresent,

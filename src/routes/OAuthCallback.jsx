@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { createSupabaseBrowserClient } from '../lib/supabaseClient.js'
+import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { exchangeAuthorizationCode } from '../lib/sharesight/oauth.js'
 import { persistFreshSharesightOAuthTokens } from '../lib/sharesight/syncSharesightPortfolios.js'
 
@@ -19,6 +19,8 @@ function formatUnknownError(error) {
 export function OAuthCallback() {
   const navigate = useNavigate()
 
+  const { authReady, userPresent, supabase } = useSharesightIntegration()
+
   const [errorMessage, setErrorMessage] = useState(
     /** @type {string | null} */
     (null),
@@ -33,21 +35,10 @@ export function OAuthCallback() {
     let cancelled = false
 
     async function run() {
-      const supabase = createSupabaseBrowserClient()
+      if (!authReady || !userPresent) return
 
       if (!supabase) {
         setErrorMessage('Missing Supabase configuration (env vars).')
-
-        return
-      }
-
-      const { data: userData } = await supabase.auth.getUser()
-      const userId = userData?.user?.id
-
-      if (!userId) {
-        setErrorMessage(
-          'You must be signed in before completing Sharesight OAuth. Sign in first, then try connecting again.',
-        )
 
         return
       }
@@ -89,7 +80,32 @@ export function OAuthCallback() {
     return () => {
       cancelled = true
     }
-  }, [code, navigate, state])
+  }, [authReady, code, navigate, state, supabase, userPresent])
+
+  if (!authReady) {
+    return (
+      <div className="min-h-[60vh] p-10 text-[#F0F0F8]">
+        <p className="text-sm text-[#9090A8]">Preparing Sharesight OAuth…</p>
+      </div>
+    )
+  }
+
+  if (!userPresent) {
+    return (
+      <div className="min-h-[60vh] p-10 text-[#F0F0F8]">
+        <h1 className="text-xl font-semibold">Sign in required</h1>
+
+        <p className="mt-3 max-w-[70ch] text-sm text-[#9090A8]">
+          Sign in first, then reconnect Sharesight. You will need to restart the Sharesight authorize flow because this
+          callback contains a fresh OAuth code.
+        </p>
+
+        <Link className="mt-6 inline-flex text-[#79CBFF] underline" to="/login">
+          Go to sign in
+        </Link>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-[60vh] p-10 text-[#F0F0F8]">

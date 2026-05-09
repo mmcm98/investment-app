@@ -1,6 +1,8 @@
+import { useNavigate } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 
 export function DashboardHome() {
+  const navigate = useNavigate()
   const ss = useSharesightIntegration()
 
   const lastSyncLabel =
@@ -12,19 +14,34 @@ export function DashboardHome() {
 
   const blockingMessage = !ss.supabaseConfigured
     ? 'Supabase env vars missing: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`. Without them, Sharesight OAuth tokens cannot be stored in Postgres.'
-    : !ss.userPresent
-      ? 'No Supabase authenticated session detected. Sharesight OAuth + sync writes are keyed to `auth.uid()` — implement your sign-in flow, then reconnect Sharesight.'
-      : null
+    : null
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 p-10 text-[#F0F0F8]">
       <header>
-        <h1 className="text-[22px] font-semibold">Investment dashboard</h1>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[22px] font-semibold">Investment dashboard</h1>
 
-        <p className="mt-2 max-w-[80ch] text-sm text-[#9090A8]">
-          Sharesight is the upstream source of truth. This scaffold syncs holdings, trades, cash balances (valuation
-          payload parsing), portfolio performance payloads, and per-holding income events into Supabase.
-        </p>
+            <p className="mt-2 max-w-[80ch] text-sm text-[#9090A8]">
+              Sharesight is the upstream source of truth. This scaffold syncs holdings, trades, cash balances (valuation
+              payload parsing), portfolio performance payloads, and per-holding income events into Supabase.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs text-[#F0F0F8] hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!ss.supabaseConfigured}
+            onClick={async () => {
+              await ss.signOut()
+
+              navigate('/login', { replace: true })
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-6 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
@@ -40,7 +57,7 @@ export function DashboardHome() {
               type="button"
               className="rounded-md bg-[#4DB8FF] px-4 py-2 font-mono text-sm font-semibold text-[#0A0A0F] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void ss.refreshSharesightNow()}
-              disabled={!ss.supabaseConfigured || !ss.userPresent || ss.reconnectRequired || ss.isSyncing}
+              disabled={!ss.supabaseConfigured || ss.reconnectRequired || ss.isSyncing}
               title={
                 ss.reconnectRequired ? 'Reconnect OAuth first.' : ss.isSyncing ? 'Sync in progress…' : 'Sync Sharesight'
               }
@@ -52,7 +69,7 @@ export function DashboardHome() {
               type="button"
               className="rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-sm text-[#F0F0F8] hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => ss.connectSharesight()}
-              disabled={!ss.supabaseConfigured || !ss.userPresent}
+              disabled={!ss.supabaseConfigured}
             >
               {isConnected ? 'Reconnect sharesight OAuth' : 'Connect sharesight'}
             </button>
