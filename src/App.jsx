@@ -1,9 +1,12 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SharesightIntegrationProvider, useSharesightIntegration } from './context/SharesightIntegrationContext.jsx'
 import { LivePricesProvider } from './context/LivePricesContext.jsx'
+import { AppShell } from './components/AppShell.jsx'
 import { DashboardHome } from './routes/DashboardHome.jsx'
 import { OAuthCallback } from './routes/OAuthCallback.jsx'
 import { AuthPage } from './routes/AuthPage.jsx'
+import { SatellitePortfolio } from './routes/SatellitePortfolio.jsx'
+import { PositionDetail } from './routes/PositionDetail.jsx'
 
 function AuthLoading() {
   return (
@@ -56,7 +59,13 @@ function AppRoutes() {
 
       <Route path="/callback" element={<OAuthCallback />} />
 
-      <Route path="/" element={ss.userPresent ? <DashboardHome /> : <Navigate to="/login" replace />} />
+      <Route path="/" element={ss.userPresent ? <AppShell /> : <Navigate to="/login" replace />}>
+        <Route index element={<DashboardHome />} />
+
+        <Route path="satellite" element={<SatellitePortfolio />} />
+
+        <Route path="satellite/position/:id" element={<PositionDetail />} />
+      </Route>
 
       <Route path="*" element={<Navigate to={ss.userPresent ? '/' : '/login'} replace />} />
     </Routes>

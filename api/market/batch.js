@@ -1,7 +1,7 @@
 import { dispatchMarketRpc } from './_lib/handlers.mjs'
 
 /**
- * POST body JSON: `{ op: 'quotes'|'fx'|'ath', … }`
+ * POST body JSON: `{ op: 'quotes'|'fx'|'ath'|'tickerSearch', … }`
  * Env: optional `MARKET_API_SECRET` — optional `x-market-secret` header must match.
  *
  * See `server/dev-market-api.mjs` for local development (same dispatcher).

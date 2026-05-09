@@ -26,3 +26,11 @@ export async function postMarketBatch(payload) {
 
   return /** @type {Record<string, unknown>} */ (await res.json())
 }
+
+/**
+ * @param {string} query
+ * @param {number} [limit]
+ */
+export async function postTickerSearch(query, limit = 15) {
+  return postMarketBatch({ op: 'tickerSearch', query, limit })
+}

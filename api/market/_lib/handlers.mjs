@@ -3,6 +3,17 @@ import yahooFinance from 'yahoo-finance2'
 
 const FMP_BASE = 'https://financialmodelingprep.com/api/v3'
 
+/**
+ * @param {typeof process.env | Record<string,string|undefined>} env
+ */
+function resolveFmpApiKey(env) {
+  return (
+    `${env.FMP_API_KEY ?? ''}`.trim() ||
+    `${env.VITE_FMP_API_KEY ?? ''}`.trim() ||
+    `${env.VITE_FMP ?? ''}`.trim()
+  )
+}
+
 /** @typedef {{ fmpSymbol?: string|null, exchangeShort?: string|null, yahooSymbol: string }} QuoteItemInput */
 
 async function fmpQuote(symbol, apiKey) {
@@ -99,10 +110,7 @@ async function mapPool(concurrency, items, fn) {
  * @param {typeof process.env | Record<string,string|undefined>} env
  */
 export async function quotesOp(body, env) {
-  const fmpApiKey =
-    `${env.FMP_API_KEY ?? ''}`.trim() ||
-    `${env.VITE_FMP_API_KEY ?? ''}`.trim() ||
-    `${env.VITE_FMP ?? ''}`.trim()
+  const fmpApiKey = resolveFmpApiKey(env)
 
   const items = Array.isArray(body.items) ? body.items : []
 
@@ -291,6 +299,83 @@ export async function athOp(body) {
   return { ok: true, ath: out }
 }
 
+/**
+ * FMP ticker / company search (user types → dropdown lock-in symbol + exchange).
+ *
+ * @param {{ query?: string|null, limit?: number }} body
+ * @param {typeof process.env | Record<string,string|undefined>} env
+ */
+export async function tickerSearchOp(body, env) {
+  const key = resolveFmpApiKey(env)
+
+  if (!key) return { ok: false, error: 'fmp_key_missing', results: [] }
+
+  const rawQ = typeof body.query === 'string' ? body.query.trim() : ''
+
+  if (rawQ.length < 1) return { ok: true, results: [] }
+
+  const limitRaw = Number(body.limit ?? 12)
+
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), 40) : 12
+
+  const tryUrls = [
+    `${FMP_BASE}/search?query=${encodeURIComponent(rawQ)}&limit=${limit}&apikey=${encodeURIComponent(key)}`,
+    `${FMP_BASE}/search-ticker?query=${encodeURIComponent(rawQ)}&limit=${limit}&apikey=${encodeURIComponent(key)}`,
+  ]
+
+  /** @type {unknown} */
+  let parsed = null
+
+  for (const url of tryUrls) {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } })
+
+    if (!res.ok) continue
+
+    try {
+      const j = /** @type {unknown} */ (await res.json())
+
+      if (Array.isArray(j)) {
+        parsed = j
+
+        break
+      }
+    } catch {
+      /* try alternate path */
+    }
+  }
+
+  if (!parsed || !Array.isArray(parsed)) parsed = []
+
+  const rawList = Array.isArray(parsed) ? parsed : []
+
+  /** @type {{ symbol: string, name: string, exchangeShortName: string, currency: string|null }[]} */
+  const results = []
+
+  for (const row of rawList) {
+    if (!row || typeof row !== 'object') continue
+
+    const o = /** @type {Record<string, unknown>} */ (row)
+
+    const symbol = `${Reflect.get(o, 'symbol') ?? Reflect.get(o, 'ticker') ?? ''}`.trim().toUpperCase()
+
+    const name = `${Reflect.get(o, 'name') ?? Reflect.get(o, 'companyName') ?? ''}`.trim()
+
+    const x =
+      `${Reflect.get(o, 'stockExchangeShortName') ?? Reflect.get(o, 'exchangeShortName') ?? Reflect.get(o, 'exchange') ?? ''}`.trim()
+
+    const curRaw = Reflect.get(o, 'currency')
+
+    const currency = typeof curRaw === 'string' && curRaw.trim() ? curRaw.trim().toUpperCase() : null
+
+    if (!symbol || !name) continue
+
+    results.push({ symbol, name, exchangeShortName: x.toUpperCase() || 'UNKNOWN', currency })
+    if (results.length >= limit) break
+  }
+
+  return { ok: true, results }
+}
+
 /** @param {Record<string, unknown>} body */
 
 export async function dispatchMarketRpc(body, env) {
@@ -303,6 +388,8 @@ export async function dispatchMarketRpc(body, env) {
   if (op === 'fx') return await fxOp(body, env)
 
   if (op === 'ath') return await athOp(body)
+
+  if (op === 'tickerSearch') return await tickerSearchOp(body, env)
 
   return { ok: false, error: `unknown_op:${op}` }
 }
