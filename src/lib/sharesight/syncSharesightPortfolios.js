@@ -10,6 +10,7 @@ import {
   extractCashBalancesFromValuationPayload,
 } from './normalizePayloads.js'
 import {
+  fetchSharesightOAuthRow,
   patchSharesightSyncMeta,
   upsertSharesightOAuthRow,
 } from './oauthCredentialsRepository.js'
@@ -104,13 +105,18 @@ async function upsertChunks(supabase, table, rows, onConflict, chunkSize = 250) 
 /**
  * Best-effort: pull payouts for holdings (distribution / income tracking).
  *
+ * @param {SupabaseClient} supabase
  * @param {string} accessToken
  * @param {{ holding_external_id: string }[]} holdings
  */
-async function syncIncomeForHoldings(accessToken, holdings) {
+async function syncIncomeForHoldings(supabase, accessToken, holdings) {
   const incomeRowsToInsert = await mapWithConcurrency(5, holdings, async (h) => {
     const payoutsJson = /** @type {any} */ (
-      await sharesightAuthorizedFetch(accessToken, `api/v3/holdings/${encodeURIComponent(h.holding_external_id)}/payouts`)
+      await sharesightAuthorizedFetch(
+        accessToken,
+        `api/v3/holdings/${encodeURIComponent(h.holding_external_id)}/payouts`,
+        { supabase },
+      )
     )
 
     const payouts = Array.isArray(payoutsJson?.payouts) ? payoutsJson.payouts : Array.isArray(payoutsJson) ? payoutsJson : []
@@ -181,9 +187,10 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     await deletePortfolioSnapshotRows(supabase, userId, portfolioRole, portfolioId)
 
     const settled = await Promise.allSettled([
-      sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/holdings`),
-      sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/valuation.json`),
+      sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/holdings`, { supabase }),
+      sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/valuation.json`, { supabase }),
       sharesightAuthorizedFetch(accessToken, `api/v2.1/portfolios/${safePortfolioPath}/performance.json`, {
+        supabase,
         searchParams: {
           start_date: '2000-01-01',
           end_date: isoDateUtc(),
@@ -373,6 +380,7 @@ async function syncPortfolioTrades(supabase, accessToken, userId, syncRunId, por
 
       const tradesPayload = /** @type {any} */ (
         await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/trades.json`, {
+          supabase,
           searchParams: { page },
         })
       )
@@ -438,7 +446,7 @@ async function syncPortfolioIncome(
   portfolioHoldingKeys,
 ) {
   try {
-    const incomePairs = await syncIncomeForHoldings(accessToken, portfolioHoldingKeys)
+    const incomePairs = await syncIncomeForHoldings(supabase, accessToken, portfolioHoldingKeys)
 
     const incomeRows = incomePairs
       .map((pair) =>
@@ -678,9 +686,19 @@ export async function syncSharesightPortfolios(supabase, args) {
  * @param {import('./oauth.js').SharesightTokenResponse} tokenPayload
  */
 export async function persistFreshSharesightOAuthTokens(supabase, tokenPayload) {
+  const { data: existing } = await fetchSharesightOAuthRow(supabase)
+
+  const fromPayload =
+    typeof tokenPayload.refresh_token === 'string' && tokenPayload.refresh_token.trim()
+      ? tokenPayload.refresh_token.trim()
+      : null
+
+  /** Some token responses omit `refresh_token`; never clear a previously stored refresh token. */
+  const refreshTokenNext = fromPayload ?? (typeof existing?.refresh_token === 'string' ? existing.refresh_token : null)
+
   await upsertSharesightOAuthRow(supabase, {
     access_token: tokenPayload.access_token,
-    refresh_token: tokenPayload.refresh_token,
+    refresh_token: refreshTokenNext,
     token_type: tokenPayload.token_type,
     expires_in: tokenPayload.expires_in,
     reconnect_required: false,

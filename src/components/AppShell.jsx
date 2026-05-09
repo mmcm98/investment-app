@@ -4,6 +4,7 @@ import { Layers, Radar, Satellite, Settings, LayoutDashboard } from 'lucide-reac
 import { useShellUserFlags } from '../hooks/useShellUserFlags.js'
 import { useLivePrices } from '../context/LivePricesContext.jsx'
 import { InvThemeProvider } from '../context/InvThemeContext.jsx'
+import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 
 const desktopLink = (light) => ({ isActive }) =>
   [
@@ -26,24 +27,38 @@ const NAV = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
+const BANNER_ASIDE_TOP = ['top-0', 'top-12 lg:top-12', 'top-[5.25rem] lg:top-[5.25rem]', 'top-[7.75rem] lg:top-[7.75rem]']
+
+const BANNER_MAIN_PAD = [
+  'pt-6 lg:pt-10',
+  'pt-12 lg:pt-12',
+  'pt-[5.25rem] lg:pt-[5.25rem]',
+  'pt-[7.75rem] lg:pt-[7.75rem]',
+]
+
 export function AppShell() {
   const { globalApiPaused, themeClass } = useShellUserFlags()
 
   const { quoteError, pricesUpdating } = useLivePrices()
 
+  const { authReady, userPresent, reconnectRequired, connectSharesight } = useSharesightIntegration()
+
   const light = themeClass === 'light'
+
+  const showSharesightReconnectBanner = authReady && userPresent && reconnectRequired
 
   const showPauseBanner = globalApiPaused
 
   const showQuoteBanner = Boolean(quoteError)
 
-  const bannerStack = showPauseBanner && showQuoteBanner ? 2 : showPauseBanner || showQuoteBanner ? 1 : 0
+  const bannerStack = Math.min(
+    3,
+    Number(showSharesightReconnectBanner) + Number(showPauseBanner) + Number(showQuoteBanner),
+  )
 
-  const fixedTopUnderBanners =
-    bannerStack === 2 ? 'top-[5.25rem] lg:top-[5.25rem]' : bannerStack === 1 ? 'top-12 lg:top-12' : 'top-0'
+  const fixedTopUnderBanners = BANNER_ASIDE_TOP[bannerStack]
 
-  const mainTopPad =
-    bannerStack === 2 ? 'pt-[5.25rem] lg:pt-[5.25rem]' : bannerStack === 1 ? 'pt-12 lg:pt-12' : 'pt-6 lg:pt-10'
+  const mainTopPad = BANNER_MAIN_PAD[bannerStack]
 
   return (
     <div
@@ -51,6 +66,22 @@ export function AppShell() {
     >
       {bannerStack > 0 ? (
         <div className="sticky top-0 z-50">
+          {showSharesightReconnectBanner ? (
+            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 border-b border-[rgba(239,68,68,0.55)] bg-[rgba(153,27,27,0.94)] px-4 py-2.5 text-center font-mono text-[11px] text-[#FEE2E2]">
+              <span className="max-w-[min(56rem,94vw)]">
+                Sharesight connection expired — reconnect to resume syncing
+              </span>
+
+              <button
+                type="button"
+                className="min-h-[36px] touch-manipulation rounded border border-[rgba(254,202,202,0.65)] px-4 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-wide text-[#FEE2E2] underline-offset-2 hover:bg-[rgba(254,226,226,0.16)]"
+                onClick={() => connectSharesight()}
+              >
+                Reconnect
+              </button>
+            </div>
+          ) : null}
+
           {showPauseBanner ? (
             <div className="border-b border-[rgba(239,68,68,0.55)] bg-[rgba(127,29,29,0.92)] px-4 py-2 text-center font-mono text-[11px] text-[#FEE2E2]">
               API pause is active — Gemini and Claude traffic is suspended. Clear <span className="font-semibold">global_api_pause</span> in

@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { RefreshCw } from 'lucide-react'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useDashboardData } from '../hooks/useDashboardData.js'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
@@ -84,19 +85,30 @@ export function DashboardHome() {
         </div>
 
         <div className="flex min-w-[200px] flex-col items-end gap-2">
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Refresh Sharesight sync"
+              title="Refresh Sharesight sync"
+              className={`inline-flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-md border ${theme.borderSubtle} ${theme.fg} disabled:cursor-not-allowed disabled:opacity-40 hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF]`}
               onClick={() => void ss.refreshSharesightNow()}
               disabled={ss.reconnectRequired || ss.isSyncing}
             >
-              {ss.isSyncing ? 'Sync…' : 'Refresh'}
+              <RefreshCw className={`h-[18px] w-[18px] shrink-0 ${ss.isSyncing ? 'animate-spin' : ''}`} aria-hidden />
             </button>
 
             <button
               type="button"
-              className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+              className={`min-h-[44px] touch-manipulation rounded-md border border-transparent px-2 py-2 font-mono text-xs underline decoration-[rgba(77,184,255,0.55)] underline-offset-4 hover:text-[#79CBFF] disabled:cursor-not-allowed`}
+              disabled={!ss.supabaseConfigured}
+              onClick={() => ss.connectSharesight()}
+            >
+              Reconnect OAuth
+            </button>
+
+            <button
+              type="button"
+              className={`min-h-[44px] touch-manipulation rounded-md border ${theme.borderSubtle} px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40`}
               disabled={!ss.supabaseConfigured}
               onClick={async () => {
                 await ss.signOut()

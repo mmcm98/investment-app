@@ -12,6 +12,7 @@ import { createSupabaseBrowserClient } from '../lib/supabaseClient.js'
 import { fetchSharesightOAuthRow } from '../lib/sharesight/oauthCredentialsRepository.js'
 import { beginSharesightAuthorizationCodeFlow } from '../lib/sharesight/oauth.js'
 import { syncSharesightPortfolios } from '../lib/sharesight/syncSharesightPortfolios.js'
+import { ensureSharesightAccessToken } from '../lib/sharesight/tokenSession.js'
 
 /** @typedef {import('../lib/sharesight/oauthCredentialsRepository.js').SharesightOAuthRow | null} SharesightOAuthRow */
 
@@ -77,6 +78,9 @@ export function SharesightIntegrationProvider({ children }) {
 
   const syncInFlightRef = useRef(false)
   const didInitialSyncRef = useRef(false)
+
+  /** @type {React.MutableRefObject<boolean | null>} */
+  const prevReconnectRequiredRef = useRef(null)
 
   useEffect(() => {
     if (!oauthRow) {
@@ -245,6 +249,46 @@ export function SharesightIntegrationProvider({ children }) {
 
     return () => window.clearInterval(id)
   }, [supabase, userPresent, oauthRow, reconnectRequired, runSync])
+
+  /** Proactively rotate credentials before expiry (not only on sync / 401). */
+  useEffect(() => {
+    if (!supabase || !userPresent) return undefined
+    if (!oauthRow) return undefined
+    if (reconnectRequired) return undefined
+
+    const id = window.setInterval(() => {
+      void (async () => {
+        try {
+          await ensureSharesightAccessToken(supabase)
+        } catch {
+          // Token row / refresh errors update `reconnect_required` server-side; always resync local snapshot.
+        } finally {
+          await reloadLocalSnapshot()
+        }
+      })()
+    }, 4 * 60 * 1000)
+
+    return () => window.clearInterval(id)
+  }, [supabase, userPresent, oauthRow, reconnectRequired, reloadLocalSnapshot])
+
+  /** After a successful OAuth reconnect, run a fresh sync so the banner clears and holdings update. */
+  useEffect(() => {
+    const prev = prevReconnectRequiredRef.current
+
+    if (prev === null) {
+      prevReconnectRequiredRef.current = reconnectRequired
+
+      return undefined
+    }
+
+    if (prev === true && reconnectRequired === false && supabase && userPresent && oauthRow) {
+      void runSync('app_load')
+    }
+
+    prevReconnectRequiredRef.current = reconnectRequired
+
+    return undefined
+  }, [reconnectRequired, oauthRow, runSync, supabase, userPresent])
 
   const connectSharesight = useCallback(() => {
     setSurfaceError(null)

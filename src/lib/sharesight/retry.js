@@ -11,7 +11,7 @@ async function sleep(ms) {
 /**
  * @template T
  * @param {Retryable<T>} fn
- * @param {{ attempts?: number }} [opts]
+ * @param {{ attempts?: number, shouldRetry?: (error: unknown) => boolean }} [opts]
  */
 export async function withRetries(fn, opts) {
   const attempts = opts?.attempts ?? 3
@@ -23,6 +23,11 @@ export async function withRetries(fn, opts) {
       return await fn({ attempt, error: lastError })
     } catch (error) {
       lastError = error
+
+      if (opts?.shouldRetry && !opts.shouldRetry(error)) {
+        throw error
+      }
+
       const isFinal = attempt >= attempts
 
       if (isFinal) break

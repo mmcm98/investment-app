@@ -19,7 +19,7 @@ function formatUnknownError(error) {
 export function OAuthCallback() {
   const navigate = useNavigate()
 
-  const { authReady, userPresent, supabase } = useSharesightIntegration()
+  const { authReady, userPresent, supabase, reloadLocalSnapshot } = useSharesightIntegration()
 
   const [errorMessage, setErrorMessage] = useState(
     /** @type {string | null} */
@@ -64,6 +64,7 @@ export function OAuthCallback() {
         sessionStorage.removeItem('sharesight_oauth_state')
 
         await persistFreshSharesightOAuthTokens(supabase, tokenPayload)
+        await reloadLocalSnapshot()
 
         if (cancelled) return
 
@@ -80,7 +81,7 @@ export function OAuthCallback() {
     return () => {
       cancelled = true
     }
-  }, [authReady, code, navigate, state, supabase, userPresent])
+  }, [authReady, code, navigate, reloadLocalSnapshot, state, supabase, userPresent])
 
   if (!authReady) {
     return (
