@@ -1,7 +1,15 @@
 /** Server-only: Yahoo via yahoo-finance2 + FMP quote fallback — no DOM scraping. */
-import yahooFinance from 'yahoo-finance2'
+import YahooFinance from 'yahoo-finance2'
 
 const FMP_BASE = 'https://financialmodelingprep.com/api/v3'
+
+/**
+ * yahoo-finance2 v3: default export is the class — you must `new YahooFinance()` or every
+ * `YahooFinance.quote()` call hits a static stub and throws (see createYahooFinance.js).
+ */
+const yahooFinance = new YahooFinance({
+  suppressNotices: ['yahooSurvey'],
+})
 
 /**
  * @param {typeof process.env | Record<string,string|undefined>} env
@@ -14,6 +22,55 @@ function resolveFmpApiKey(env) {
   )
 }
 
+/**
+ * Safe one-line env summary for server logs (no secret values).
+ *
+ * @param {typeof process.env | Record<string,string|undefined>} env
+ */
+export function summarizeMarketEnvForLogs(env) {
+  const k = resolveFmpApiKey(env)
+
+  return {
+    fmpKeyConfigured: Boolean(k),
+    fmpKeyLength: k.length,
+    vercel: `${env.VERCEL ?? ''}`.trim() === '1',
+    region: `${env.VERCEL_REGION ?? ''}`.trim() || null,
+    node: typeof process !== 'undefined' ? process.version : null,
+  }
+}
+
+/**
+ * @param {unknown} e
+ */
+function errorToLogString(e) {
+  if (e instanceof Error) return e.message
+
+  if (typeof e === 'string') return e
+
+  try {
+    return JSON.stringify(e)
+  } catch {
+    return 'unknown_error'
+  }
+}
+
+/**
+ * @param {unknown} json
+ */
+function fmpErrorMessageFromBody(json) {
+  if (!json || typeof json !== 'object') return null
+
+  const o = /** @type {Record<string, unknown>} */ (json)
+
+  const a = Reflect.get(o, 'Error Message')
+
+  const b = Reflect.get(o, 'error')
+
+  const s = typeof a === 'string' ? a : typeof b === 'string' ? b : null
+
+  return s && s.trim() ? s.trim() : null
+}
+
 /** @typedef {{ fmpSymbol?: string|null, exchangeShort?: string|null, yahooSymbol: string }} QuoteItemInput */
 
 async function fmpQuote(symbol, apiKey) {
@@ -24,10 +81,32 @@ async function fmpQuote(symbol, apiKey) {
   const url = `${FMP_BASE}/quote/${encodeURIComponent(symbol)}?apikey=${encodeURIComponent(key)}`
   const res = await fetch(url, { headers: { Accept: 'application/json' } })
 
-  if (!res.ok) return null
-
   /** @type {unknown} */
-  const json = await res.json()
+  let json
+
+  try {
+    json = await res.json()
+  } catch {
+    console.warn('[market/fmp] quote json_parse_failed', { symbol, httpStatus: res.status })
+
+    return null
+  }
+
+  if (!res.ok) {
+    const fmpErr = fmpErrorMessageFromBody(json)
+
+    console.warn('[market/fmp] quote http_error', { symbol, httpStatus: res.status, fmpError: fmpErr })
+
+    return null
+  }
+
+  const bodyErr = fmpErrorMessageFromBody(json)
+
+  if (bodyErr) {
+    console.warn('[market/fmp] quote fmp_error_payload', { symbol, fmpError: bodyErr })
+
+    return null
+  }
 
   if (!Array.isArray(json) || json.length === 0) return null
 
@@ -125,7 +204,7 @@ export async function quotesOp(body, env) {
     cleaned.push({ ...it, yahooSymbol })
   }
 
-  const results = await mapPool(/** @type {const} */ (6), cleaned, async (it) => {
+  const results = await mapPool(/** @type {const} */ (6), cleaned, async (it, jobIdx) => {
     try {
       const single = /** @type {unknown} */ (await yahooFinance.quote(it.yahooSymbol))
       const y = coerceYahooQuote(Array.isArray(single) ? single[0] : single)
@@ -137,7 +216,14 @@ export async function quotesOp(body, env) {
       }
 
       throw new Error('Yahoo quote missing numeric last')
-    } catch {
+    } catch (yahooErr) {
+      if (jobIdx === 0) {
+        console.warn('[market/yahoo] quote path failed (sample)', {
+          symbol: it.yahooSymbol,
+          err: errorToLogString(yahooErr),
+        })
+      }
+
       const fmpSym = `${it.fmpSymbol ?? ''}`.trim()
 
       const fmpRow = fmpSym ? await fmpQuote(fmpSym.replace(/^=/, ''), fmpApiKey) : null
@@ -199,7 +285,7 @@ export async function fxOp(body, env) {
       /** @type {const} */ (8),
       symbols,
       /** @returns {Promise<FxRow>} */
-      async (sym) => {
+      async (sym, jobIdx) => {
         try {
           const row = /** @type {unknown} */ (await yahooFinance.quote(sym))
 
@@ -217,7 +303,11 @@ export async function fxOp(body, env) {
               : Number.parseFloat(`${priceRaw ?? ''}`)
 
           return { sym, price: Number.isFinite(priceNum) ? priceNum : null, raw: ro }
-        } catch {
+        } catch (fxErr) {
+          if (jobIdx === 0) {
+            console.warn('[market/yahoo] fx quote failed (sample)', { sym, err: errorToLogString(fxErr) })
+          }
+
           return { sym, price: null }
         }
       },
@@ -406,18 +496,33 @@ export async function tickerSearchOp(body, env) {
   for (const url of tryUrls) {
     const res = await fetch(url, { headers: { Accept: 'application/json' } })
 
-    if (!res.ok) continue
+    /** @type {unknown} */
+    let j
 
     try {
-      const j = /** @type {unknown} */ (await res.json())
-
-      if (Array.isArray(j)) {
-        parsed = j
-
-        break
-      }
+      j = await res.json()
     } catch {
-      /* try alternate path */
+      continue
+    }
+
+    const fmpErr = fmpErrorMessageFromBody(j)
+
+    if (!res.ok || fmpErr) {
+      console.warn('[market/fmp] tickerSearch_response', {
+        httpStatus: res.status,
+        fmpError: fmpErr,
+        query: rawQ,
+      })
+    }
+
+    if (!res.ok) continue
+
+    if (fmpErr) continue
+
+    if (Array.isArray(j)) {
+      parsed = j
+
+      break
     }
   }
 

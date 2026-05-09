@@ -1,8 +1,12 @@
-import { dispatchMarketRpc } from './_lib/handlers.mjs'
+import { randomUUID } from 'node:crypto'
+
+import { dispatchMarketRpc, summarizeMarketEnvForLogs } from './_lib/handlers.mjs'
 
 /**
  * POST body JSON: `{ op: 'quotes'|'fx'|'ath'|'tickerSearch'|'chartHistory', … }`
- * Env: optional `MARKET_API_SECRET` — optional `x-market-secret` header must match.
+ * Env:
+ * - **Server (Vercel / Node):** `FMP_API_KEY` (recommended) or legacy `VITE_FMP_*` mirrored into the function runtime.
+ * - Optional `MARKET_API_SECRET` — client must send matching `x-market-secret`.
  *
  * See `server/dev-market-api.mjs` for local development (same dispatcher).
  */
@@ -61,14 +65,40 @@ export default async function handler(req, res) {
     return
   }
 
+  const reqId = randomUUID()
+
+  const opRaw = parsed && typeof parsed.op === 'string' ? `${parsed.op}`.trim() : ''
+
+  console.info('[market/batch]', { reqId, op: opRaw || 'missing_op', diag: summarizeMarketEnvForLogs(env) })
+
+  const started = typeof performance !== 'undefined' ? performance.now() : Date.now()
+
   try {
     const out = await dispatchMarketRpc(parsed ?? {}, env)
+
+    const elapsed =
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) - started
+
+    console.info('[market/batch]', {
+      reqId,
+      op: opRaw || 'missing_op',
+      ok: Reflect.get(out, 'ok') === true ? true : Reflect.get(out, 'ok'),
+      ms: Math.round(elapsed),
+    })
 
     res.statusCode = 200
     res.setHeader('Content-Type', 'application/json')
 
     res.end(JSON.stringify(out))
   } catch (e) {
+    console.error('[market/batch]', {
+      reqId,
+      op: opRaw || 'missing_op',
+      err: `${e}`,
+
+      stack: e instanceof Error ? e.stack : undefined,
+    })
+
     res.statusCode = 500
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify({ ok: false, error: `${e}` }))
