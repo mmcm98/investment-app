@@ -3,6 +3,10 @@
     {
       "source": "/__proxy_sharesight/:path*",
       "destination": "https://api.sharesight.com/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

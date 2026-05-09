@@ -38,8 +38,15 @@ function AppRoutes() {
     return <MissingSupabaseConfig />
   }
 
+  /** OAuth redirect must resolve even while Supabase session is still hydrating (SPA + Sharesight callback). */
   if (!ss.authReady) {
-    return <AuthLoading />
+    return (
+      <Routes>
+        <Route path="/callback" element={<OAuthCallback />} />
+
+        <Route path="*" element={<AuthLoading />} />
+      </Routes>
+    )
   }
 
   return (
