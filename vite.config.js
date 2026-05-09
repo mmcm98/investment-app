@@ -30,6 +30,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/analysis/watchlist-flash',
       },
+      '/api/analysis/portfolio-briefing': {
+        target: 'http://127.0.0.1:8791',
+        changeOrigin: true,
+        rewrite: () => '/analysis/portfolio-briefing',
+      },
     },
   },
 })

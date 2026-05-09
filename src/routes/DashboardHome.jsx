@@ -9,6 +9,7 @@ import { DashboardAlerts } from '../components/dashboard/DashboardAlerts.jsx'
 import { PortfolioTrendChart } from '../components/dashboard/PortfolioTrendChart.jsx'
 import { DashboardSatelliteStrip, DashboardWatchPanel } from '../components/dashboard/DashboardPositionGrid.jsx'
 import { PortfolioBalanceSnapshot } from '../components/dashboard/PortfolioBalanceSnapshot.jsx'
+import { PortfolioBriefingPanel } from '../components/dashboard/PortfolioBriefingPanel.jsx'
 import { DcaWidget } from '../components/DcaWidget.jsx'
 
 export function DashboardHome() {
@@ -80,9 +81,9 @@ export function DashboardHome() {
 
       {dash.settingsRow?.global_api_pause === true ? (
         <div className="rounded-lg border border-[rgba(239,68,68,0.45)] bg-[rgba(239,68,68,0.09)] px-4 py-3 text-sm text-[#EF4444]">
-          Global API pause is enabled — Gemini and Claude calls are halted until you unset{' '}
+          API pause is enabled — analysis, watchlist Flash, and portfolio briefing generation are suspended until you unset{' '}
 
-          <span className="font-mono text-[11px]">global_api_pause</span> on <span className="font-mono text-[11px]">user_settings</span>.
+          <span className="font-mono text-[11px]">global_api_pause</span> in <span className="font-mono text-[11px]">user_settings</span>.
 
         </div>
       ) : null}
@@ -134,6 +135,8 @@ export function DashboardHome() {
 
         isSyncing={ss.isSyncing}
       />
+
+      <PortfolioBriefingPanel dashboard={dash} satelliteCards={sp.cards} />
 
       <DashboardAlerts
         positions={dash.positions}

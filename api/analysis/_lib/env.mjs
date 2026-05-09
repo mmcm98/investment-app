@@ -23,6 +23,11 @@ export function readAnalysisEnv(globalEnv) {
       `${e.VITE_FMP ?? ''}`.trim(),
     claudeModel:
       `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() || `${e.VITE_ANTHROPIC_ANALYSIS_MODEL ?? ''}`.trim() || `claude-opus-4-20250514`,
+    briefingClaudeModel:
+      `${e.CLAUDE_BRIEFING_MODEL ?? ''}`.trim() ||
+      `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() ||
+      `${e.VITE_ANTHROPIC_ANALYSIS_MODEL ?? ''}`.trim() ||
+      `claude-opus-4-20250514`,
     geminiModel: `${e.GEMINI_RESEARCH_MODEL ?? ''}`.trim() || `gemini-1.5-pro`,
     geminiFlashModel: `${e.GEMINI_FLASH_MODEL ?? ''}`.trim() || `gemini-2.0-flash`,
   }

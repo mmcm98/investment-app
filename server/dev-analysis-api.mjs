@@ -6,6 +6,7 @@
 import http from 'node:http'
 import triadHandler from '../api/analysis/triad.js'
 import watchlistFlashHandler from '../api/analysis/watchlistFlash.js'
+import portfolioBriefingHandler from '../api/analysis/portfolio-briefing.js'
 
 const PORT = Number.parseInt(`${process.env.ANALYSIS_DEV_PORT ?? '8791'}`, 10)
 
@@ -32,6 +33,12 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (url.startsWith('/analysis/portfolio-briefing')) {
+    await portfolioBriefingHandler(req, res)
+
+    return
+  }
+
   res.statusCode = 404
   res.setHeader('Content-Type', 'text/plain')
   res.end('Not found')
@@ -39,6 +46,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.warn(
-    `[dev-analysis-api] triad POST http://127.0.0.1:${PORT}/analysis/triad · flash POST http://127.0.0.1:${PORT}/analysis/watchlist-flash`,
+    `[dev-analysis-api] http://127.0.0.1:${PORT} — /analysis/triad · /analysis/watchlist-flash · /analysis/portfolio-briefing`,
   )
 })
