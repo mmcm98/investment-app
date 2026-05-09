@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SharesightIntegrationProvider, useSharesightIntegration } from './context/SharesightIntegrationContext.jsx'
+import { LivePricesProvider } from './context/LivePricesContext.jsx'
 import { DashboardHome } from './routes/DashboardHome.jsx'
 import { OAuthCallback } from './routes/OAuthCallback.jsx'
 import { AuthPage } from './routes/AuthPage.jsx'
@@ -66,7 +67,9 @@ export default function App() {
   return (
     <SharesightIntegrationProvider>
       <BrowserRouter>
-        <AppRoutes />
+        <LivePricesProvider>
+          <AppRoutes />
+        </LivePricesProvider>
       </BrowserRouter>
     </SharesightIntegrationProvider>
   )

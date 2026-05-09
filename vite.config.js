@@ -15,6 +15,11 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/__proxy_sharesight/, ''),
       },
+      '/api/market/batch': {
+        target: 'http://127.0.0.1:8790',
+        changeOrigin: true,
+        rewrite: () => '/market/batch',
+      },
     },
   },
 })

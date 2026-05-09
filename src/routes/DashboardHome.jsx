@@ -1,9 +1,30 @@
 import { useNavigate } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
+import { useLivePrices } from '../context/LivePricesContext.jsx'
+
+/** @param {number | null | undefined} n */
+function fmtAud(n) {
+  if (n == null || !Number.isFinite(n)) return '—'
+
+  return n.toLocaleString('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+/** @param {number | null | undefined} n */
+function fmtNum(n) {
+  if (n == null || !Number.isFinite(n)) return '—'
+
+  return n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+}
 
 export function DashboardHome() {
   const navigate = useNavigate()
   const ss = useSharesightIntegration()
+  const lp = useLivePrices()
 
   const lastSyncLabel =
     ss.lastSuccessfulSyncAt && Number.isFinite(Date.parse(ss.lastSuccessfulSyncAt))
@@ -113,6 +134,119 @@ export function DashboardHome() {
                   Automated sync hasn’t refreshed within the freshness window (~31 minutes since last successful sync).
                   Showing the last persisted snapshot from Supabase.
                 </p>
+              </div>
+            ) : null}
+
+            {holdingsPresent(ss.holdingsCount) ? (
+              <div className="mt-8 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#0A0A0F] px-5 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-4">
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Live prices cache</p>
+
+                    <p className="mt-2 text-xs text-[#9090A8]">
+                      Yahoo Finance via{' '}
+                      <span className="font-mono text-[#79CBFF]">yahoo-finance2</span> (server-side) · FMP{' '}
+                      <span className="font-mono text-[#79CBFF]">/quote</span> fallback · FX majors every{' '}
+                      <span className="font-mono text-[#F0F0F8]">5</span>m · quotes tick only when exchange session is open
+                      (§10.15).
+                      {lp.pricesUpdating ? (
+                        <span aria-live="polite" className="ml-2 inline-flex items-center rounded border border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[#FCD34D]">
+                          updating…
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="rounded-md border border-[rgba(255,255,255,0.12)] px-3 py-2 font-mono text-xs text-[#F0F0F8] hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={lp.pricesUpdating}
+                    onClick={() => void lp.refreshMarketData()}
+                  >
+                    {lp.pricesUpdating ? 'Refreshing…' : 'Refresh prices now'}
+                  </button>
+                </div>
+
+                {lp.quoteError ? (
+                  <p className="mt-4 font-mono text-xs text-[#EF4444]">{lp.quoteError}</p>
+                ) : (
+                  <p className="mt-4 hidden text-[10px] text-[#505068] xl:block">
+                    Local dev: run <span className="font-mono text-[#79CBFF]">npm run dev:market-api</span> alongside Vite so
+                    <span className="font-mono"> /api/market/batch </span>
+                    resolves. Deployed on Vercel uses <span className="font-mono">api/market/batch.js</span>.
+                  </p>
+                )}
+
+                <div className="mt-5 overflow-x-auto">
+                  <table className="w-full min-w-[880px] border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-[rgba(255,255,255,0.06)] text-[10px] font-semibold uppercase tracking-wide text-[#505068]">
+                        <th className="py-3 pr-3">Portfolio</th>
+                        <th className="py-3 pr-3 font-mono">Symbol</th>
+                        <th className="py-3 pr-3 font-mono">Yahoo</th>
+
+                        <th className="py-3 pr-3">Instrument</th>
+                        <th className="py-3 pr-3 text-right font-mono">Last (AUD)</th>
+                        <th className="py-3 pr-3 text-right font-mono">ATH (AUD)</th>
+                        <th className="py-3 pr-3 text-right font-mono">Native</th>
+                        <th className="py-3 pr-3 font-mono">Src</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {lp.mergedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="py-6 text-xs text-[#9090A8]">
+                            No holdings rows matched with quote cache yet. Run Sharesight sync, then quote refresh completes on a
+                            short timer.
+                          </td>
+                        </tr>
+                      ) : (
+                        lp.mergedRows.map((row, idx) => (
+                          <tr
+                            key={`${row.portfolio_role}-${row.holding_external_id}-${idx}`}
+                            className="border-b border-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.02)]"
+                          >
+                            <td className="py-3 pr-3 font-mono text-xs capitalize text-[#9090A8]">{row.portfolio_role}</td>
+                            <td className="py-3 pr-3 font-mono text-[#F0F0F8]">{row.instrument_symbol ?? '—'}</td>
+                            <td className="py-3 pr-3 font-mono text-xs text-[#79CBFF]">{row.yahoo_symbol}</td>
+
+                            <td className="py-3 pr-3 text-xs text-[#F0F0F8]">
+                              <div className="max-w-[220px] truncate" title={`${row.instrument_name ?? ''}`}>
+                                {row.instrument_name ?? '—'}
+                              </div>
+                            </td>
+                            <td className="py-3 pr-3 text-right font-mono text-[#F0F0F8]">
+                              <span>{fmtAud(row.display_aud)}</span>
+                              {lp.pricesUpdating && row.display_aud != null ? (
+                                <span aria-hidden className="ml-1 text-[10px] text-[#F59E0B]">
+                                  · refreshing
+                                </span>
+                              ) : null}
+                              {row.display_aud == null &&
+                              row.display_native == null &&
+                              row.sharesight_market_value != null ? (
+                                <span className="mt-1 block text-[10px] text-[#505068]" title="Broker snapshot from Sharesight sync">
+                                  snapshot {fmtAud(row.sharesight_market_value)}
+                                </span>
+                              ) : null}
+                            </td>
+                            <td className="py-3 pr-3 text-right font-mono text-xs text-[#9090A8]">
+                              {fmtAud(row.ath)}
+                              {row.ath_as_of ? (
+                                <span className="mt-1 block text-[10px] text-[#505068]">{row.ath_as_of}</span>
+                              ) : null}
+                            </td>
+                            <td className="py-3 pr-3 text-right font-mono text-xs text-[#9090A8]">{fmtNum(row.display_native)}</td>
+                            <td className="py-3 pr-3 font-mono text-[10px] uppercase text-[#505068]">
+                              {row.quote_source ?? '—'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ) : null}
 

@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:market-api": "node server/dev-market-api.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@shadcn/ui": "^0.0.4",

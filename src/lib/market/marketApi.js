@@ -1,0 +1,28 @@
+const BATCH_PATH = '/api/market/batch'
+
+/**
+ * @param {Record<string, unknown>} payload
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function postMarketBatch(payload) {
+  const secret = `${import.meta.env.VITE_MARKET_API_SECRET ?? ''}`.trim()
+
+  /** @type {Record<string, string>} */
+  const headers = { 'Content-Type': 'application/json' }
+
+  if (secret) headers['x-market-secret'] = secret
+
+  const res = await fetch(BATCH_PATH, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+
+    throw new Error(`market batch HTTP ${res.status}: ${text.slice(0, 300)}`)
+  }
+
+  return /** @type {Record<string, unknown>} */ (await res.json())
+}
