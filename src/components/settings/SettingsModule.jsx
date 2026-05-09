@@ -533,10 +533,22 @@ export function SettingsModule() {
 
                 </button>
 
-                <button type="button" className={`${btnGhost()} ml-2 mt-3`} onClick={() => void s.refreshSharesightNow()}>
-                  Test sync now
+                <button
+                  type="button"
+                  disabled={s.isSyncing}
+                  className={`${btnGhost()} ml-2 mt-3 disabled:opacity-45`}
+                  onClick={() => void s.refreshSharesightNow()}
+                >
+                  {s.isSyncing ? 'Syncing…' : 'Test sync now'}
 
                 </button>
+
+                {s.isSyncing && s.syncPhaseLabel ? (
+                  <span className="mt-2 block font-mono text-[10px] text-[#79CBFF]" aria-live="polite">
+                    {s.syncPhaseLabel}
+
+                  </span>
+                ) : null}
               </dd>
             </div>
 

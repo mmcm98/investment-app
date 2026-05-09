@@ -34,6 +34,7 @@ const SharesightIntegrationContext = createContext(null)
  *   lastSyncError: string | null
  *   holdingsCount: number | null
  *   isSyncing: boolean
+ *   syncPhaseLabel: string | null
  *   surfaceError: string | null
  *   isStale: boolean
  *   connectSharesight: () => void
@@ -68,6 +69,7 @@ export function SharesightIntegrationProvider({ children }) {
 
   const [holdingsCount, setHoldingsCount] = useState(null)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [syncPhaseLabel, setSyncPhaseLabel] = useState(/** @type {string | null} */ (null))
   const [surfaceError, setSurfaceError] = useState(null)
 
   /** Used purely to re-evaluate staleness banners without relying on impure clocks during render */
@@ -191,17 +193,27 @@ export function SharesightIntegrationProvider({ children }) {
 
       syncInFlightRef.current = true
       setIsSyncing(true)
+      setSyncPhaseLabel(null)
       setSurfaceError(null)
 
       try {
-        await syncSharesightPortfolios(supabase, { trigger })
+        await syncSharesightPortfolios(supabase, {
+          trigger,
+
+          onProgress: (label) => setSyncPhaseLabel(label),
+        })
+
+        setSyncPhaseLabel('Refreshing local data…')
+
         await reloadLocalSnapshot()
       } catch (error) {
         setSurfaceError(formatUnknownError(error))
+
         await reloadLocalSnapshot()
       } finally {
         syncInFlightRef.current = false
         setIsSyncing(false)
+        setSyncPhaseLabel(null)
         setFreshnessClock(Date.now())
       }
     },
@@ -276,6 +288,7 @@ export function SharesightIntegrationProvider({ children }) {
       lastSyncError: oauthRow?.last_sync_error ?? null,
       holdingsCount,
       isSyncing,
+      syncPhaseLabel,
       surfaceError,
       isStale,
       connectSharesight,
@@ -290,6 +303,7 @@ export function SharesightIntegrationProvider({ children }) {
     holdingsCount,
     isSyncing,
     oauthRow,
+    syncPhaseLabel,
     reconnectRequired,
     refreshSharesightNow,
     reloadLocalSnapshot,

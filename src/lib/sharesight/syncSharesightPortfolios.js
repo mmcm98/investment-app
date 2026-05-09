@@ -128,9 +128,356 @@ async function syncIncomeForHoldings(accessToken, holdings) {
 }
 
 /**
+ * Deletes prior snapshot rows for one portfolio slice before re-import.
+ *
  * @param {SupabaseClient} supabase
- * @param {{ trigger: 'app_load'|'interval'|'manual' }} args
+ * @param {string} userId
+ * @param {'core'|'satellite'} portfolioRole
+ * @param {string} portfolioId
  */
+async function deletePortfolioSnapshotRows(supabase, userId, portfolioRole, portfolioId) {
+  const tables = /** @type {const} */ ([
+    'sharesight_holdings',
+    'sharesight_trades',
+    'sharesight_cash_balances',
+    'sharesight_performance_snapshots',
+    'sharesight_income_events',
+  ])
+
+  await Promise.all(
+    tables.map(async (table) => {
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq('user_id', userId)
+        .eq('portfolio_role', portfolioRole)
+        .eq('portfolio_external_id', portfolioId)
+
+      if (error) throw error
+    }),
+  )
+}
+
+/**
+ * Parallel API fetch for holdings, valuation (cash), and performance — then upsert holdings, then cash + performance.
+ *
+ * @param {SupabaseClient} supabase
+ * @param {string} accessToken
+ * @param {string} userId
+ * @param {string} syncRunId
+ * @param {PortfolioTarget} target
+ */
+async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, syncRunId, target) {
+  const portfolioId = target.portfolioExternalId
+
+  const portfolioRole = /** @type {'core'|'satellite'} */ (target.portfolioRole)
+
+  const safePortfolioPath = encodeURIComponent(portfolioId)
+
+  /** @type {string[]} */
+  const warnings = []
+
+  try {
+    await deletePortfolioSnapshotRows(supabase, userId, portfolioRole, portfolioId)
+
+    const settled = await Promise.allSettled([
+      sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/holdings`),
+      sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/valuation.json`),
+      sharesightAuthorizedFetch(accessToken, `api/v2.1/portfolios/${safePortfolioPath}/performance.json`, {
+        searchParams: {
+          start_date: '2000-01-01',
+          end_date: isoDateUtc(),
+        },
+      }),
+    ])
+
+    const holdingsSettled = settled[0]
+
+    if (holdingsSettled.status !== 'fulfilled') {
+      warnings.push(
+        `Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(holdingsSettled.status === 'rejected' ? holdingsSettled.reason : 'Unknown holdings response')}`,
+      )
+
+      return {
+        holdingsOk: false,
+        warnings,
+        portfolioRole,
+        portfolioId,
+        portfolioHoldingKeys: /** @type {{ holding_external_id: string }[]} */ ([]),
+      }
+    }
+
+    const holdingsPayload = /** @type {any} */ (holdingsSettled.value)
+
+    /** @type {{ holding_external_id: string }[]} */
+    const portfolioHoldingKeys = []
+
+    const holdingsRaw = Array.isArray(holdingsPayload?.holdings)
+      ? holdingsPayload.holdings
+      : Array.isArray(holdingsPayload)
+        ? holdingsPayload
+        : []
+
+    const holdingRows = holdingsRaw
+      .map((raw) => {
+        const normalized = normalizeHolding(raw)
+
+        if (!normalized) return null
+
+        portfolioHoldingKeys.push({ holding_external_id: normalized.holding_external_id })
+
+        return {
+          user_id: userId,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+          holding_external_id: normalized.holding_external_id,
+          instrument_symbol: normalized.instrument_symbol,
+          instrument_name: normalized.instrument_name,
+          quantity: normalized.quantity,
+          market_value: normalized.market_value,
+          cost_basis: normalized.cost_basis,
+          unrealized_gain_loss: normalized.unrealized_gain_loss,
+          currency: normalized.currency,
+          raw: normalized.raw,
+          sync_run_id: syncRunId,
+        }
+      })
+      .filter(Boolean)
+
+    const dedupedHoldings = dedupeRowsBy(
+      /** @type {any[]} */ (holdingRows),
+      (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}`,
+    )
+
+    await upsertChunks(supabase, 'sharesight_holdings', dedupedHoldings, UPSERT_HOLDINGS_ON)
+
+    const valuationPayload =
+      settled[1].status === 'fulfilled' ? /** @type {any} */ (settled[1].value) : null
+
+    if (settled[1].status !== 'fulfilled') {
+      warnings.push(
+        `Valuation fetch failed (${portfolioRole}): ${formatErrorBestEffort(
+          settled[1].status === 'rejected' ? settled[1].reason : 'Unknown',
+        )}`,
+      )
+    }
+
+    const performancePayload =
+      settled[2].status === 'fulfilled' ? /** @type {any} */ (settled[2].value) : null
+
+    if (settled[2].status !== 'fulfilled') {
+      warnings.push(
+        `Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(
+          settled[2].status === 'rejected' ? settled[2].reason : 'Unknown',
+        )}`,
+      )
+    }
+
+    const cashUpsertPromise = (async () => {
+      if (!valuationPayload) return undefined
+
+      try {
+        const cashRowsRaw = extractCashBalancesFromValuationPayload(valuationPayload).map((c) => ({
+          user_id: userId,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+          account_key: c.account_key,
+          label: c.label,
+          currency: c.currency ?? '',
+          balance: c.balance,
+          raw: c.raw,
+          sync_run_id: syncRunId,
+        }))
+
+        const dedupedCash = dedupeRowsBy(
+          /** @type {any[]} */ (cashRowsRaw),
+          (r) => `${r.user_id}|${r.portfolio_role}|${r.portfolio_external_id}|${r.account_key}|${r.currency}`,
+        )
+
+        await upsertChunks(supabase, 'sharesight_cash_balances', dedupedCash, UPSERT_CASH_ON)
+      } catch (error) {
+        warnings.push(`Valuation / cash balances import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+      }
+
+      return undefined
+    })()
+
+    const perfUpsertPromise = (async () => {
+      if (!performancePayload) return undefined
+
+      try {
+        const endDate = isoDateUtc()
+
+        await upsertChunks(
+          supabase,
+          'sharesight_performance_snapshots',
+          [
+            {
+              user_id: userId,
+              portfolio_role: portfolioRole,
+              portfolio_external_id: portfolioId,
+              start_date: '2000-01-01',
+              end_date: endDate,
+              payload: performancePayload,
+              sync_run_id: syncRunId,
+            },
+          ],
+          UPSERT_PERFORMANCE_ON,
+          10,
+        )
+      } catch (error) {
+        warnings.push(`Performance import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+      }
+
+      return undefined
+    })()
+
+    await Promise.all([cashUpsertPromise, perfUpsertPromise])
+
+    return {
+      holdingsOk: true,
+      warnings,
+      portfolioRole,
+      portfolioId,
+      portfolioHoldingKeys,
+    }
+  } catch (error) {
+    warnings.push(`Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+
+    return {
+      holdingsOk: false,
+      warnings,
+      portfolioRole,
+      portfolioId,
+      portfolioHoldingKeys: [],
+    }
+  }
+}
+
+/**
+ * @param {SupabaseClient} supabase
+ * @param {string} accessToken
+ * @param {string} userId
+ * @param {string} syncRunId
+ * @param {'core'|'satellite'} portfolioRole
+ * @param {string} portfolioId
+ */
+async function syncPortfolioTrades(supabase, accessToken, userId, syncRunId, portfolioRole, portfolioId) {
+  const safePortfolioPath = encodeURIComponent(portfolioId)
+
+  try {
+    const tradesAll = []
+
+    for (let page = 1; page <= 250; page += 1) {
+      /** @type {any} */
+
+      const tradesPayload = /** @type {any} */ (
+        await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/trades.json`, {
+          searchParams: { page },
+        })
+      )
+
+      const pageTrades = Array.isArray(tradesPayload?.trades)
+        ? tradesPayload.trades
+        : Array.isArray(tradesPayload)
+          ? tradesPayload
+          : []
+
+      if (pageTrades.length === 0) break
+
+      tradesAll.push(...pageTrades)
+    }
+
+    const tradeRows = tradesAll
+      .map((t) => {
+        const normalized = normalizeTrade(t)
+
+        if (!normalized) return null
+
+        return {
+          user_id: userId,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+          trade_external_id: normalized.trade_external_id,
+          raw: normalized.raw,
+          sync_run_id: syncRunId,
+        }
+      })
+      .filter(Boolean)
+
+    const dedupedTrades = dedupeRowsBy(
+      /** @type {any[]} */ (tradeRows),
+      (r) => `${r.user_id}|${r.portfolio_role}|${r.trade_external_id}`,
+    )
+
+    await upsertChunks(supabase, 'sharesight_trades', dedupedTrades, UPSERT_TRADES_ON)
+
+    return null
+  } catch (error) {
+    return /** @type {string} */ (`Trades import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+  }
+}
+
+/**
+ * @param {SupabaseClient} supabase
+ * @param {string} accessToken
+ * @param {string} userId
+ * @param {string} syncRunId
+ * @param {'core'|'satellite'} portfolioRole
+ * @param {string} portfolioId
+ * @param {{ holding_external_id: string }[]} portfolioHoldingKeys
+ */
+
+async function syncPortfolioIncome(
+  supabase,
+  accessToken,
+  userId,
+  syncRunId,
+  portfolioRole,
+  portfolioId,
+  portfolioHoldingKeys,
+) {
+  try {
+    const incomePairs = await syncIncomeForHoldings(accessToken, portfolioHoldingKeys)
+
+    const incomeRows = incomePairs
+      .map((pair) =>
+        pair
+          ? {
+              user_id: userId,
+              portfolio_role: portfolioRole,
+              portfolio_external_id: portfolioId,
+              holding_external_id: pair.holding_external_id,
+              income_external_id: pair.normalized.income_external_id,
+              paid_on: pair.normalized.paid_on,
+              amount: pair.normalized.amount,
+              currency: pair.normalized.currency,
+              kind: pair.normalized.kind,
+              raw: pair.normalized.raw,
+              sync_run_id: syncRunId,
+            }
+          : null,
+      )
+      .filter(Boolean)
+
+    const dedupedIncome = dedupeRowsBy(
+      /** @type {any[]} */ (incomeRows),
+      (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}|${r.income_external_id}`,
+    )
+
+    await upsertChunks(supabase, 'sharesight_income_events', dedupedIncome, UPSERT_INCOME_ON)
+
+    return null
+  } catch (error) {
+    return /** @type {string} */ (`Income import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+  }
+}
+
+/**
+ * @param {SupabaseClient} supabase
+ * @param {{ trigger: 'app_load'|'interval'|'manual', onProgress?: (label: string) => void }} args
+ */
+
 export async function syncSharesightPortfolios(supabase, args) {
   const attemptAt = new Date().toISOString()
 
@@ -189,235 +536,69 @@ export async function syncSharesightPortfolios(supabase, args) {
   let finalizedThisSyncRun = false
 
   try {
-    /** If any portfolio fails deletes + holdings fetch/upsert, we do not advance "last successful" metadata. */
-    let holdingsSucceededForAllTargets = true
+    const report = typeof args.onProgress === 'function' ? args.onProgress : /** @param {string} _m */ () => {}
 
-    for (const target of targets) {
-      const portfolioId = target.portfolioExternalId
-      const portfolioRole = target.portfolioRole
+    /** Dual labels mirror the Sharesight workloads (parallel per portfolio vs sequential UI copy). */
 
-      const safePortfolioPath = encodeURIComponent(portfolioId)
+    report('Syncing holdings…')
 
-      // Purge previous snapshot rows for this portfolio slice (holdings/trades/etc. refreshed each run).
-      const deleteEq = async (/** @type {string} */ table) => {
-        const { error } = await supabase
-          .from(table)
-          .delete()
-          .eq('user_id', userId)
-          .eq('portfolio_role', portfolioRole)
-          .eq('portfolio_external_id', portfolioId)
+    /** Core + Satellite: parallel deletes, parallel Sharesight pulls, holdings upsert, then parallel cash & performance upserts. */
 
-        if (error) throw error
+    const phase1Task = Promise.all(
+      targets.map((target) =>
+        syncPortfolioHoldingsCashPerf(supabase, /** @type {string} */ (accessToken), userId, syncRunId, target),
+      ),
+    )
+
+    report('Syncing cash balances & performance…')
+
+    const phase1 = await phase1Task
+
+    for (const p of phase1) partialWarnings.push(...p.warnings)
+
+    const holdingsSucceededForAllTargets = phase1.every((prt) => prt.holdingsOk)
+
+    if (holdingsSucceededForAllTargets) {
+      /** Trades: after holdings IDs exist; portfolios run concurrently (different portfolio_role keys). Pagination stays sequential per portfolio */
+      report('Syncing trade history…')
+
+      const tradeWarns = await Promise.all(
+        phase1.map((prt) =>
+          syncPortfolioTrades(
+            supabase,
+            /** @type {string} */ (accessToken),
+            userId,
+            syncRunId,
+            prt.portfolioRole,
+            prt.portfolioId,
+          ),
+        ),
+      )
+
+      for (const tw of tradeWarns) {
+        if (typeof tw === 'string') partialWarnings.push(tw)
       }
 
-      /** @type {{ holding_external_id: string }[]} */
-      let portfolioHoldingKeys = []
+      /** Income: sequential after trades globally; holdings keys from phase1; parallel across portfolios */
 
-      try {
-        await deleteEq('sharesight_holdings')
-        await deleteEq('sharesight_trades')
-        await deleteEq('sharesight_cash_balances')
-        await deleteEq('sharesight_performance_snapshots')
-        await deleteEq('sharesight_income_events')
+      report('Syncing income & distributions…')
 
-        /** @type {any} */
-        const holdingsPayload = /** @type {any} */ (
-          await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/holdings`)
-        )
+      const incomeWarns = await Promise.all(
+        phase1.map((prt) =>
+          syncPortfolioIncome(
+            supabase,
+            /** @type {string} */ (accessToken),
+            userId,
+            syncRunId,
+            prt.portfolioRole,
+            prt.portfolioId,
+            prt.portfolioHoldingKeys,
+          ),
+        ),
+      )
 
-        const holdingsRaw = Array.isArray(holdingsPayload?.holdings)
-          ? holdingsPayload.holdings
-          : Array.isArray(holdingsPayload)
-            ? holdingsPayload
-            : []
-
-        const holdingRows = holdingsRaw
-          .map((raw) => {
-            const normalized = normalizeHolding(raw)
-
-            if (!normalized) return null
-
-            portfolioHoldingKeys.push({ holding_external_id: normalized.holding_external_id })
-
-            return {
-              user_id: userId,
-              portfolio_role: portfolioRole,
-              portfolio_external_id: portfolioId,
-              holding_external_id: normalized.holding_external_id,
-              instrument_symbol: normalized.instrument_symbol,
-              instrument_name: normalized.instrument_name,
-              quantity: normalized.quantity,
-              market_value: normalized.market_value,
-              cost_basis: normalized.cost_basis,
-              unrealized_gain_loss: normalized.unrealized_gain_loss,
-              currency: normalized.currency,
-              raw: normalized.raw,
-              sync_run_id: syncRunId,
-            }
-          })
-          .filter(Boolean)
-
-        const dedupedHoldings = dedupeRowsBy(
-          /** @type {any[]} */ (holdingRows),
-          (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}`,
-        )
-
-        await upsertChunks(supabase, 'sharesight_holdings', dedupedHoldings, UPSERT_HOLDINGS_ON)
-      } catch (error) {
-        holdingsSucceededForAllTargets = false
-        partialWarnings.push(`Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
-
-        portfolioHoldingKeys = []
-        continue
-      }
-
-      // Trades (paginated best-effort; upsert tolerates overlap / re-runs)
-      /** @type {any[]} */
-      const tradesAll = []
-
-      try {
-        for (let page = 1; page <= 250; page += 1) {
-          /** @type {any} */
-          const tradesPayload = /** @type {any} */ (
-            await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/trades.json`, {
-              searchParams: { page },
-            })
-          )
-
-          const pageTrades = Array.isArray(tradesPayload?.trades)
-            ? tradesPayload.trades
-            : Array.isArray(tradesPayload)
-              ? tradesPayload
-              : []
-
-          if (pageTrades.length === 0) break
-
-          tradesAll.push(...pageTrades)
-        }
-
-        const tradeRows = tradesAll
-          .map((t) => {
-            const normalized = normalizeTrade(t)
-
-            if (!normalized) return null
-
-            return {
-              user_id: userId,
-              portfolio_role: portfolioRole,
-              portfolio_external_id: portfolioId,
-              trade_external_id: normalized.trade_external_id,
-              raw: normalized.raw,
-              sync_run_id: syncRunId,
-            }
-          })
-          .filter(Boolean)
-
-        const dedupedTrades = dedupeRowsBy(
-          /** @type {any[]} */ (tradeRows),
-          (r) => `${r.user_id}|${r.portfolio_role}|${r.trade_external_id}`,
-        )
-
-        await upsertChunks(supabase, 'sharesight_trades', dedupedTrades, UPSERT_TRADES_ON)
-      } catch (error) {
-        partialWarnings.push(`Trades import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
-      }
-
-      // Portfolio valuation → cash balances (broker cash extraction is best-effort)
-      try {
-        const valuationPayload = await sharesightAuthorizedFetch(
-          accessToken,
-          `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
-        )
-
-        const cashRowsRaw = extractCashBalancesFromValuationPayload(valuationPayload).map((c) => ({
-          user_id: userId,
-          portfolio_role: portfolioRole,
-          portfolio_external_id: portfolioId,
-          account_key: c.account_key,
-          label: c.label,
-          currency: c.currency ?? '',
-          balance: c.balance,
-          raw: c.raw,
-          sync_run_id: syncRunId,
-        }))
-
-        const dedupedCash = dedupeRowsBy(
-          /** @type {any[]} */ (cashRowsRaw),
-          (r) => `${r.user_id}|${r.portfolio_role}|${r.portfolio_external_id}|${r.account_key}|${r.currency}`,
-        )
-
-        await upsertChunks(supabase, 'sharesight_cash_balances', dedupedCash, UPSERT_CASH_ON)
-      } catch (error) {
-        partialWarnings.push(`Valuation / cash balances import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
-      }
-
-      // Performance over time (full JSON retained for downstream charting UI)
-      try {
-        /** @type {any} */
-        const performancePayload = await sharesightAuthorizedFetch(
-          accessToken,
-          `api/v2.1/portfolios/${safePortfolioPath}/performance.json`,
-          {
-            searchParams: {
-              start_date: '2000-01-01',
-              end_date: isoDateUtc(),
-            },
-          },
-        )
-
-        const endDate = isoDateUtc()
-
-        await upsertChunks(
-          supabase,
-          'sharesight_performance_snapshots',
-          [
-            {
-              user_id: userId,
-              portfolio_role: portfolioRole,
-              portfolio_external_id: portfolioId,
-              start_date: '2000-01-01',
-              end_date: endDate,
-              payload: performancePayload,
-              sync_run_id: syncRunId,
-            },
-          ],
-          UPSERT_PERFORMANCE_ON,
-          10,
-        )
-      } catch (error) {
-        partialWarnings.push(`Performance import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
-      }
-
-      // Income events (requires per-holding calls)
-      try {
-        const incomePairs = await syncIncomeForHoldings(accessToken, portfolioHoldingKeys)
-
-        const incomeRows = incomePairs.map((pair) =>
-          pair
-            ? {
-                user_id: userId,
-                portfolio_role: portfolioRole,
-                portfolio_external_id: portfolioId,
-                holding_external_id: pair.holding_external_id,
-                income_external_id: pair.normalized.income_external_id,
-                paid_on: pair.normalized.paid_on,
-                amount: pair.normalized.amount,
-                currency: pair.normalized.currency,
-                kind: pair.normalized.kind,
-                raw: pair.normalized.raw,
-                sync_run_id: syncRunId,
-              }
-            : null,
-        ).filter(Boolean)
-
-        const dedupedIncome = dedupeRowsBy(
-          /** @type {any[]} */ (incomeRows),
-          (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}|${r.income_external_id}`,
-        )
-
-        await upsertChunks(supabase, 'sharesight_income_events', dedupedIncome, UPSERT_INCOME_ON)
-      } catch (error) {
-        partialWarnings.push(`Income import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+      for (const iw of incomeWarns) {
+        if (typeof iw === 'string') partialWarnings.push(iw)
       }
     }
 
@@ -444,6 +625,8 @@ export async function syncSharesightPortfolios(supabase, args) {
     }
 
     try {
+      report('Applying watchlist promotions…')
+
       await promoteWatchlistMatchesAfterSync(supabase, userId)
     } catch (e) {
       partialWarnings.push(`Watchlist promotion: ${formatErrorBestEffort(e)}`)
@@ -460,6 +643,8 @@ export async function syncSharesightPortfolios(supabase, args) {
       status: finalWarnings.length ? 'partial' : 'success',
       error_message: finalWarnings.length ? finalWarnings.join(' | ') : null,
     })
+
+    report('Complete')
 
     finalizedThisSyncRun = true
 

@@ -26,6 +26,7 @@ function fmtPct1(n) {
  * lastSuccessfulSyncAt: string|null
  * onSyncNow: () => void
  * isSyncing: boolean
+ * syncPhaseLabel?: string | null
 }} props
  */
 
@@ -92,6 +93,13 @@ export function PortfolioHealthBar(props) {
           <p className="text-[10px] font-medium uppercase tracking-wide text-[#505068]">Last sync</p>
 
           <p className="mt-2 font-mono text-xs leading-snug text-[#9090A8]">{syncLabel}</p>
+
+          {props.isSyncing && props.syncPhaseLabel ? (
+            <p className="mt-2 font-mono text-[10px] leading-snug text-[#79CBFF]" aria-live="polite">
+              {props.syncPhaseLabel}
+
+            </p>
+          ) : null}
 
           <button
             type="button"

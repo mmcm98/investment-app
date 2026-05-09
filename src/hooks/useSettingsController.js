@@ -36,8 +36,16 @@ import { resolveSchedulesFromSettings } from '../lib/dca/computeWeeklyDca.js'
  */
 
 export function useSettingsController() {
-  const { supabase, userPresent, connectSharesight, refreshSharesightNow, oauthRow, reloadLocalSnapshot } =
-    useSharesightIntegration()
+  const {
+    supabase,
+    userPresent,
+    connectSharesight,
+    refreshSharesightNow,
+    oauthRow,
+    reloadLocalSnapshot,
+    isSyncing,
+    syncPhaseLabel,
+  } = useSharesightIntegration()
 
   const [loading, setLoading] = useState(true)
 
@@ -339,6 +347,8 @@ export function useSettingsController() {
     connectSharesight,
     refreshSharesightNow,
     reloadLocalSnapshot,
+    isSyncing,
+    syncPhaseLabel,
     supabase,
     defaultStandardBands: DEFAULT_STANDARD_TIERS.map((b) => ({ ...b })),
     defaultGhhfBands: DEFAULT_GHHF_TIERS.map((b) => ({ ...b })),

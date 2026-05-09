@@ -83,28 +83,37 @@ export function DashboardHome() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => void ss.refreshSharesightNow()}
-            disabled={ss.reconnectRequired || ss.isSyncing}
-          >
-            {ss.isSyncing ? 'Sync…' : 'Refresh'}
-          </button>
+        <div className="flex min-w-[200px] flex-col items-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => void ss.refreshSharesightNow()}
+              disabled={ss.reconnectRequired || ss.isSyncing}
+            >
+              {ss.isSyncing ? 'Sync…' : 'Refresh'}
+            </button>
 
-          <button
-            type="button"
-            className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={!ss.supabaseConfigured}
-            onClick={async () => {
-              await ss.signOut()
+            <button
+              type="button"
+              className="min-h-[44px] touch-manipulation rounded-md border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs hover:border-[rgba(77,184,255,0.65)] hover:text-[#79CBFF] disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!ss.supabaseConfigured}
+              onClick={async () => {
+                await ss.signOut()
 
-              navigate('/login', { replace: true })
-            }}
-          >
-            Sign out
-          </button>
+                navigate('/login', { replace: true })
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+
+          {ss.isSyncing && ss.syncPhaseLabel ? (
+            <p className="max-w-[40ch] text-right font-mono text-[10px] leading-snug text-[#79CBFF]" aria-live="polite">
+              {ss.syncPhaseLabel}
+
+            </p>
+          ) : null}
         </div>
       </header>
 
@@ -169,6 +178,8 @@ export function DashboardHome() {
         onSyncNow={() => void ss.refreshSharesightNow()}
 
         isSyncing={ss.isSyncing}
+
+        syncPhaseLabel={ss.syncPhaseLabel}
         />
       </MotionCard>
 
