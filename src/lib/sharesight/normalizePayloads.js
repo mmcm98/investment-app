@@ -19,6 +19,123 @@ function coerceNumber(v) {
   return null
 }
 
+/**
+ * Best-effort market value in **AUD** from a Sharesight holdings API payload (v2/v3 shapes vary).
+ *
+ * @param {Record<string, unknown>|null|undefined} h
+ */
+export function pickSharesightHoldingValueAudFromRaw(h) {
+  if (!h || typeof h !== 'object') return null
+
+  const val = h.value && typeof h.value === 'object' ? /** @type {Record<string, unknown>} */ (h.value) : null
+  const valCcy = `${val?.currency_code ?? ''}`.trim().toUpperCase()
+  const valAmt = coerceNumber(val?.amount)
+
+  if (valAmt != null && valCcy === 'AUD') return valAmt
+
+  const explicit = coerceNumber(
+    Reflect.get(h, 'market_value_aud') ??
+      Reflect.get(h, 'portfolio_value_aud') ??
+      Reflect.get(h, 'value_in_aud') ??
+      Reflect.get(h, 'value_in_reporting_currency_aud'),
+  )
+
+  if (explicit != null) return explicit
+
+  const reportingCcy = `${Reflect.get(h, 'reporting_currency') ?? Reflect.get(h, 'reporting_currency_code') ?? ''}`
+    .trim()
+    .toUpperCase()
+
+  if (reportingCcy === 'AUD') {
+    const n = coerceNumber(
+      Reflect.get(h, 'reporting_market_value') ??
+        Reflect.get(h, 'reporting_value') ??
+        Reflect.get(h, 'value_in_reporting_currency') ??
+        valAmt,
+    )
+
+    if (n != null) return n
+  }
+
+  const portCcy = `${Reflect.get(h, 'portfolio_currency') ?? Reflect.get(h, 'portfolio_currency_code') ?? ''}`
+    .trim()
+    .toUpperCase()
+
+  if (portCcy === 'AUD') {
+    const n = coerceNumber(
+      Reflect.get(h, 'portfolio_value') ??
+        Reflect.get(h, 'market_value_in_portfolio_currency') ??
+        Reflect.get(h, 'value_in_portfolio_currency') ??
+        Reflect.get(h, 'market_value') ??
+        valAmt,
+    )
+
+    if (n != null) return n
+  }
+
+  const curVal =
+    h.current_value && typeof h.current_value === 'object'
+      ? /** @type {Record<string, unknown>} */ (h.current_value)
+      : null
+  const curCcy = `${curVal?.currency_code ?? ''}`.trim().toUpperCase()
+  const curAmt = coerceNumber(curVal?.amount)
+
+  if (curAmt != null && curCcy === 'AUD') return curAmt
+
+  return null
+}
+
+/**
+ * @param {Record<string, unknown>|null|undefined} h
+ */
+export function pickSharesightQuantityFromRaw(h) {
+  if (!h || typeof h !== 'object') return null
+
+  return coerceNumber(
+    Reflect.get(h, 'quantity') ??
+      Reflect.get(h, 'quantity_on_hand') ??
+      Reflect.get(h, 'units_on_hand') ??
+      Reflect.get(h, 'units') ??
+      Reflect.get(h, 'balance'),
+  )
+}
+
+/**
+ * @param {{ holding_value_aud?: unknown, market_value?: unknown, currency?: unknown, raw?: unknown }} row
+ */
+export function resolveSharesightHoldingValueAud(row) {
+  const col = coerceNumber(Reflect.get(row, 'holding_value_aud'))
+
+  if (col != null) return col
+
+  const raw =
+    row.raw && typeof row.raw === 'object' ? /** @type {Record<string, unknown>} */ (row.raw) : null
+
+  const fromRaw = pickSharesightHoldingValueAudFromRaw(raw)
+
+  if (fromRaw != null) return fromRaw
+
+  const cur = `${Reflect.get(row, 'currency') ?? ''}`.trim().toUpperCase()
+
+  if (cur === 'AUD') return coerceNumber(Reflect.get(row, 'market_value'))
+
+  return null
+}
+
+/**
+ * @param {{ quantity?: unknown, raw?: unknown }} row
+ */
+export function resolveSharesightHoldingQuantity(row) {
+  const col = coerceNumber(Reflect.get(row, 'quantity'))
+
+  if (col != null) return col
+
+  const raw =
+    row.raw && typeof row.raw === 'object' ? /** @type {Record<string, unknown>} */ (row.raw) : null
+
+  return pickSharesightQuantityFromRaw(raw)
+}
+
 /** @param {unknown} raw */
 export function normalizeHolding(raw) {
   if (!raw || typeof raw !== 'object') return null
@@ -30,6 +147,20 @@ export function normalizeHolding(raw) {
 
   const holding_external_id = coerceString(h.id ?? h.holding_id ?? h.holding?.id)
   if (!holding_external_id) return null
+
+  const currency = coerceString(
+    h.currency_code ??
+      h.value?.currency_code ??
+      instrument?.currency_code ??
+      h.portfolio_currency ??
+      '',
+  )
+
+  const holding_value_aud =
+    pickSharesightHoldingValueAudFromRaw(/** @type {Record<string, unknown>} */ (h)) ??
+    (currency === 'AUD'
+      ? coerceNumber(h.market_value ?? h.value?.amount ?? h.latest_close_value ?? h.close_value)
+      : null)
 
   return {
     holding_external_id,
@@ -43,6 +174,7 @@ export function normalizeHolding(raw) {
         h.close_value ??
         h.portfolio_value,
     ),
+    holding_value_aud,
     cost_basis: coerceNumber(
       h.cost_basis ??
         h.opening_cost ??
@@ -56,13 +188,7 @@ export function normalizeHolding(raw) {
         h.capital_gain ??
         h.unrealised_capital_gain,
     ),
-    currency: coerceString(
-      h.currency_code ??
-        h.value?.currency_code ??
-        instrument?.currency_code ??
-        h.portfolio_currency ??
-        '',
-    ),
+    currency,
     raw: /** @type {Record<string, unknown>} */ ({ ...h }),
   }
 }

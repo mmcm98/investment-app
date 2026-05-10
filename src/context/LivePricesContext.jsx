@@ -12,6 +12,7 @@ import { useSharesightIntegration } from './SharesightIntegrationContext.jsx'
 import { audPerForeignUnit, deriveYahooFxSymbol, uniqueFxPairsForCurrencies } from '../lib/market/fxPairs.js'
 import { isLivePriceWindowActiveForExchange } from '../lib/market/exchangeSessions.js'
 import { describeHoldingQuoteDiagnostics, resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
+import { resolveSharesightHoldingQuantity, resolveSharesightHoldingValueAud } from '../lib/sharesight/normalizePayloads.js'
 import { yahooSymbolsLooselyEqual } from '../lib/market/tickerMap.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
@@ -28,6 +29,9 @@ import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
  *   instrument_name: string|null
  *   quantity: number|null
  *   market_value: number|null
+ *   holding_value_aud: number|null
+ *   cost_basis: number|null
+ *   unrealized_gain_loss: number|null
  *   currency: string|null
  *   raw: Record<string, unknown>
  * }} SharesightHoldingRow */
@@ -226,6 +230,101 @@ async function loadAthJobState(supabase, userId) {
   return data?.last_ath_run_sydney_date ?? null
 }
 
+/**
+ * Weekly Yahoo chart ATH → `market_quote_snapshots.ath` (AUD) via FX.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} uid
+ * @param {any[]} holdings
+ * @param {boolean} advanceSydneyJobDate when true, stamps `user_market_job_state` (daily job).
+ */
+async function persistAthHighsForHoldings(supabase, uid, holdings, advanceSydneyJobDate) {
+  if (holdings.length === 0) return
+
+  const symbols = [
+    ...new Set(holdings.map((h) => `${resolveQuoteIdentity(h).yahooSymbol ?? ''}`.trim()).filter(Boolean)),
+  ]
+
+  if (symbols.length === 0) return
+
+  const athResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'ath', symbols }))
+  const athList = /** @type {Record<string, unknown>[]} */ (Reflect.get(athResp, 'ath') ?? [])
+
+  /** @type {Record<string, { high: number|null, athDate: string|null }>} */
+  const bySym = {}
+
+  for (const row of athList) {
+    const sym = `${Reflect.get(row, 'symbol') ?? ''}`.trim().toUpperCase()
+
+    if (!sym) continue
+
+    const high = Reflect.get(row, 'high')
+    const athDate = Reflect.get(row, 'athDate')
+
+    bySym[sym] = {
+      high: typeof high === 'number' && Number.isFinite(high) ? high : null,
+      athDate: typeof athDate === 'string' ? athDate : null,
+    }
+  }
+
+  const fxForAth = await loadFxMap(supabase, uid)
+  const athNow = new Date().toISOString()
+  /** @type {Record<string, unknown>[]} */
+  const athUpserts = []
+
+  for (const h of holdings) {
+    const id = resolveQuoteIdentity(h)
+    const symKey = `${id.yahooSymbol ?? ''}`.trim().toUpperCase()
+
+    if (!symKey) continue
+
+    const rec = bySym[symKey]
+
+    if (!rec || rec.high == null) continue
+
+    const quoteCurrency = currencyIso(h.currency)
+    const athAud = toAud(rec.high, quoteCurrency, fxForAth)
+
+    athUpserts.push({
+      user_id: uid,
+      portfolio_role: h.portfolio_role,
+      portfolio_external_id: h.portfolio_external_id,
+      holding_external_id: h.holding_external_id,
+      instrument_symbol: h.instrument_symbol,
+      instrument_name: h.instrument_name,
+      fmp_symbol: id.fmpSymbol,
+      exchange_short_name: id.exchangeShortName,
+      yahoo_symbol: id.yahooSymbol,
+      quote_currency: quoteCurrency,
+      ath: athAud,
+      ath_as_of: rec.athDate,
+      ath_computed_at: athNow,
+      updated_at: athNow,
+    })
+  }
+
+  if (athUpserts.length > 0) {
+    const { error } = await supabase.from('market_quote_snapshots').upsert(athUpserts, {
+      onConflict: 'user_id,portfolio_role,holding_external_id',
+    })
+
+    if (error) throw error
+
+    console.info('[live-prices] market_quote_snapshots_ath_upsert', { rows: athUpserts.length })
+  }
+
+  if (advanceSydneyJobDate) {
+    const sydneyToday = sydneyWallDateIso(new Date())
+
+    const { error: jobErr } = await supabase.from('user_market_job_state').upsert(
+      { user_id: uid, updated_at: new Date().toISOString(), last_ath_run_sydney_date: sydneyToday },
+      { onConflict: 'user_id' },
+    )
+
+    if (jobErr) throw jobErr
+  }
+}
+
 /** @typedef {{ children: import('react').ReactNode }} LpProps */
 
 /** @param {LpProps} props */
@@ -289,7 +388,7 @@ export function LivePricesProvider({ children }) {
     const { data, error } = await supabase
       .from('sharesight_holdings')
       .select(
-        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,currency,raw',
+        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,currency,raw',
       )
       .eq('user_id', uid)
       .order('instrument_symbol', { ascending: true })
@@ -547,78 +646,48 @@ export function LivePricesProvider({ children }) {
         }
       }
 
+      /** Fresh DB snapshots so ATH checks see rows just written by the quotes upsert. */
+      let snapMapForAth = snapshotRef.current
+
+      try {
+        snapMapForAth = await loadSnapshots(supabase, uid)
+
+        snapMapForAth.forEach((v, k) => snapshotRef.current.set(k, v))
+      } catch {
+        /* keep prior ref */
+      }
+
+      const holdingsNeedingAth = holdings.filter((h) => {
+        if (
+          isCashLikeHolding({
+            instrument_symbol: h.instrument_symbol,
+            instrument_name: h.instrument_name,
+          })
+        ) {
+          return false
+        }
+
+        const id = resolveQuoteIdentity(h)
+
+        if (!`${id.yahooSymbol ?? ''}`.trim()) return false
+
+        const snap = snapMapForAth.get(holdingKey(h))
+        const ath = snap ? numOrNull(Reflect.get(snap, 'ath')) : null
+
+        return ath == null
+      })
+
+      if (holdingsNeedingAth.length > 0) {
+        console.info('[live-prices] ath_backfill_missing', { holdings: holdingsNeedingAth.length })
+
+        await persistAthHighsForHoldings(supabase, uid, holdingsNeedingAth, false)
+      }
+
       const sydneyToday = sydneyWallDateIso(new Date())
       const lastAth = await loadAthJobState(supabase, uid)
 
       if (shouldRunDailyAthJob(new Date()) && lastAth !== sydneyToday && holdings.length > 0) {
-        const symbols = [...new Set(holdings.map((h) => resolveQuoteIdentity(h).yahooSymbol))]
-
-        const athResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'ath', symbols }))
-
-        const athList = /** @type {Record<string, unknown>[]} */ (Reflect.get(athResp, 'ath') ?? [])
-
-        /** @type {Record<string, { high: number|null, athDate: string|null }>} */
-        const bySym = {}
-
-        for (const row of athList) {
-          const sym = `${Reflect.get(row, 'symbol') ?? ''}`.trim().toUpperCase()
-
-          const high = Reflect.get(row, 'high')
-          const athDate = Reflect.get(row, 'athDate')
-
-          bySym[sym] = {
-            high: typeof high === 'number' && Number.isFinite(high) ? high : null,
-            athDate: typeof athDate === 'string' ? athDate : null,
-          }
-        }
-
-        const fxForAth = await loadFxMap(supabase, uid)
-        const athNow = new Date().toISOString()
-
-        const athUpserts = []
-
-        for (const h of holdings) {
-          const id = resolveQuoteIdentity(h)
-
-          const rec = bySym[id.yahooSymbol]
-
-          if (!rec || rec.high == null) continue
-
-          const quoteCurrency = currencyIso(h.currency)
-          const athAud = toAud(rec.high, quoteCurrency, fxForAth)
-
-          athUpserts.push({
-            user_id: uid,
-            portfolio_role: h.portfolio_role,
-            portfolio_external_id: h.portfolio_external_id,
-            holding_external_id: h.holding_external_id,
-            instrument_symbol: h.instrument_symbol,
-            instrument_name: h.instrument_name,
-            fmp_symbol: id.fmpSymbol,
-            exchange_short_name: id.exchangeShortName,
-            yahoo_symbol: id.yahooSymbol,
-            quote_currency: quoteCurrency,
-            ath: athAud,
-            ath_as_of: rec.athDate,
-            ath_computed_at: athNow,
-            updated_at: athNow,
-          })
-        }
-
-        if (athUpserts.length > 0) {
-          const { error } = await supabase.from('market_quote_snapshots').upsert(athUpserts, {
-            onConflict: 'user_id,portfolio_role,holding_external_id',
-          })
-
-          if (error) throw error
-        }
-
-        const { error: jobErr } = await supabase.from('user_market_job_state').upsert(
-          { user_id: uid, updated_at: new Date().toISOString(), last_ath_run_sydney_date: sydneyToday },
-          { onConflict: 'user_id' },
-        )
-
-        if (jobErr) throw jobErr
+        await persistAthHighsForHoldings(supabase, uid, holdings, true)
       }
 
       await hydrateFromSupabase()
@@ -692,30 +761,31 @@ export function LivePricesProvider({ children }) {
               ? displayNative
               : null
 
-      const qty = numOrNull(h.quantity)
       const hk = /** @type {Record<string, unknown>} */ (h)
+      const qty = resolveSharesightHoldingQuantity(hk)
       const cashLike = isCashLikeHolding({
         instrument_symbol: h.instrument_symbol,
         instrument_name: h.instrument_name,
       })
 
-      let holdingValueAud =
-        qty != null && displayAud != null && Number.isFinite(qty) && Number.isFinite(displayAud) ? qty * displayAud : null
-
-      if (holdingValueAud == null && mv != null && currencyIso(h.currency) === 'AUD') {
-        holdingValueAud = mv
-      }
+      const holdingValueAud = resolveSharesightHoldingValueAud(hk)
 
       /** @type {number|null} */
       let unrealisedGainAud = null
 
-      const uglRaw = Reflect.get(hk, 'unrealized_gain_loss')
-      const ugl =
-        uglRaw != null && Number.isFinite(Number(uglRaw))
-          ? Number(uglRaw)
-          : Number.parseFloat(`${uglRaw ?? ''}`)
+      const cost = numOrNull(Reflect.get(hk, 'cost_basis'))
 
-      if (Number.isFinite(ugl) && currencyIso(h.currency) === 'AUD') unrealisedGainAud = ugl
+      if (holdingValueAud != null && cost != null && Number.isFinite(holdingValueAud) && Number.isFinite(cost)) {
+        unrealisedGainAud = holdingValueAud - cost
+      } else {
+        const uglRaw = Reflect.get(hk, 'unrealized_gain_loss')
+        const ugl =
+          uglRaw != null && Number.isFinite(Number(uglRaw))
+            ? Number(uglRaw)
+            : Number.parseFloat(`${uglRaw ?? ''}`)
+
+        if (Number.isFinite(ugl) && currencyIso(h.currency) === 'AUD') unrealisedGainAud = ugl
+      }
 
       /** @type {number|null} */
       let dayMoveAud = null

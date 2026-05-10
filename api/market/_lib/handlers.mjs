@@ -327,14 +327,18 @@ export async function fxOp(body, env) {
 export async function athOp(body) {
   const symbols = [...new Set((Array.isArray(body.symbols) ? body.symbols : []).map((s) => `${s}`.trim().toUpperCase()).filter(Boolean))]
 
+  /** @type {Date} */
+  const period1 = new Date('1990-01-01')
+
   /** @type {{ symbol: string, high: number | null, athDate: string | null, error?: string }[]} */
   const out = []
 
-  for (const sym of symbols) {
+  /** @param {string} sym */
+  const fetchOneAth = async (sym) => {
     try {
       const chart = /** @type {{ quotes?: unknown[] }} */ (
         await yahooFinance.chart(sym, {
-          period1: '1990-01-01',
+          period1,
           interval: '1wk',
         })
       )
@@ -375,15 +379,25 @@ export async function athOp(body) {
         }
       }
 
-      out.push({
+      return {
         symbol: sym,
         high: best > -Infinity ? best : null,
         athDate:
           bestDate && Number.isFinite(bestDate.getTime()) ? bestDate.toISOString().slice(0, 10) : null,
-      })
+      }
     } catch (e) {
-      out.push({ symbol: sym, high: null, athDate: null, error: `${e}` })
+      return { symbol: sym, high: null, athDate: null, error: `${e}` }
     }
+  }
+
+  const CONC = 4
+
+  for (let i = 0; i < symbols.length; i += CONC) {
+    const batch = symbols.slice(i, i + CONC)
+
+    const part = await Promise.all(batch.map((sym) => fetchOneAth(sym)))
+
+    out.push(...part)
   }
 
   return { ok: true, ath: out }

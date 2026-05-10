@@ -7,7 +7,7 @@ import {
   brokerCashAudBreakdown,
   bookValueTotalsFromHoldingsAud,
   dayMoveTotalsAud,
-  holdingsExCashByRoleAud,
+  holdingsExCashByRoleAudFromSharesight,
   unrealisedGainSumAud,
 } from '../lib/dashboard/dashboardTotals.js'
 
@@ -141,7 +141,7 @@ export function useDashboardData() {
 
   const dashboardPrefs = useMemo(() => readDashboardPrefs(settingsRow?.preferences), [settingsRow])
 
-  const holdingsSplit = useMemo(() => holdingsExCashByRoleAud(mergedRows), [mergedRows])
+  const holdingsSplit = useMemo(() => holdingsExCashByRoleAudFromSharesight(holdingsAll), [holdingsAll])
 
   const broker = useMemo(
     () => brokerCashAudBreakdown(cashRows, /** @type {Record<string, { aud_per_unit: number }>} */ (fxByCurrency ?? {})),

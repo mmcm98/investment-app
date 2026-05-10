@@ -5,6 +5,7 @@
  */
 
 import { isCashLikeHolding } from '../satellite/satelliteMerge.js'
+import { resolveSharesightHoldingValueAud } from '../sharesight/normalizePayloads.js'
 
 /** @param {{ portfolio_role?: string, is_cash_like?: boolean, holding_value_aud?: number|null }} row */
 export function portfolioRole(row) {
@@ -28,6 +29,33 @@ export function holdingsExCashByRoleAud(mergedRows) {
     if (hv == null) continue
 
     const pr = portfolioRole(r)
+
+    if (pr === 'core') core += hv
+    if (pr === 'satellite') sat += hv
+  }
+
+  return { coreHoldingsExcCashAud: core, satelliteHoldingsExcCashAud: sat }
+}
+
+/**
+ * Sum Sharesight `holding_value_aud` (and fallbacks from raw) by sleeve — **not** live Yahoo × qty.
+ *
+ * @param {unknown[]} rawHoldings rows from `sharesight_holdings`
+ */
+export function holdingsExCashByRoleAudFromSharesight(rawHoldings) {
+  let core = 0
+  let sat = 0
+
+  for (const row of rawHoldings) {
+    const r = /** @type {Record<string, unknown>} */ (row)
+
+    if (isCashLikeHolding(r)) continue
+
+    const hv = resolveSharesightHoldingValueAud(r)
+
+    if (hv == null || !Number.isFinite(hv)) continue
+
+    const pr = `${r.portfolio_role ?? ''}`.trim().toLowerCase()
 
     if (pr === 'core') core += hv
     if (pr === 'satellite') sat += hv

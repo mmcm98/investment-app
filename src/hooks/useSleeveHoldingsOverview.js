@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useLivePrices } from '../context/LivePricesContext.jsx'
-import { isCashLikeHolding, numOrNull } from '../lib/satellite/satelliteMerge.js'
+import { resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
+import { yahooSymbolsLooselyEqual } from '../lib/market/tickerMap.js'
+import {
+  resolveSharesightHoldingQuantity,
+  resolveSharesightHoldingValueAud,
+} from '../lib/sharesight/normalizePayloads.js'
+import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
 
 /** @param {string|null|undefined} c */
 function currencyIso(c) {
@@ -81,39 +87,54 @@ export function useSleeveHoldingsOverview(portfolioRole) {
   const rows = useMemo(() => {
     return (holdings ?? []).map((h) => {
       const hk = `${h.portfolio_role ?? ''}:${h.holding_external_id ?? ''}`
+      const row = /** @type {Record<string, unknown>} */ (h)
+
+      const yahooFromHolding = resolveQuoteIdentity({
+        instrument_symbol: h.instrument_symbol,
+        raw: h.raw && typeof h.raw === 'object' ? /** @type {Record<string, unknown>} */ (h.raw) : {},
+      }).yahooSymbol
 
       const q =
         mergedRows.find(
           (m) =>
             `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
             `${m.holding_external_id ?? ''}` === `${h.holding_external_id ?? ''}`,
-        ) ?? null
+        ) ??
+        mergedRows.find(
+          (m) =>
+            `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
+            yahooSymbolsLooselyEqual(`${m.yahoo_symbol ?? ''}`, `${yahooFromHolding ?? ''}`),
+        ) ??
+        null
 
       const cashLike = isCashLikeHolding({
         instrument_symbol: h.instrument_symbol,
         instrument_name: h.instrument_name,
       })
 
-      const qty = numOrNull(h.quantity)
-      const mv = numOrFinite(h.market_value)
+      const qty = resolveSharesightHoldingQuantity(row)
       const cost = numOrFinite(
-        Reflect.get(/** @type {Record<string, unknown>} */ (h), 'cost_basis') ??
-          Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'cost_basis'),
+        Reflect.get(row, 'cost_basis') ?? Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'cost_basis'),
       )
 
-      const uglAud =
-        q?.unrealised_gain_aud != null && Number.isFinite(Number(q.unrealised_gain_aud))
-          ? Number(q.unrealised_gain_aud)
-          : currencyIso(h.currency) === 'AUD'
-            ? numOrFinite(Reflect.get(/** @type {Record<string, unknown>} */ (h), 'unrealized_gain_loss'))
-            : null
+      const valueAud = resolveSharesightHoldingValueAud(row)
 
-      const valueAud =
-        q?.holding_value_aud != null && Number.isFinite(Number(q.holding_value_aud))
-          ? Number(q.holding_value_aud)
-          : mv != null && currencyIso(h.currency) === 'AUD'
-            ? mv
-            : null
+      let uglAud =
+        valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost)
+          ? valueAud - cost
+          : null
+
+      if (uglAud == null && currencyIso(h.currency) === 'AUD') {
+        uglAud = numOrFinite(
+          Reflect.get(row, 'unrealized_gain_loss') ??
+            Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealized_gain_loss') ??
+            Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealised_gain_loss'),
+        )
+      }
+
+      if (uglAud == null && q?.unrealised_gain_aud != null && Number.isFinite(Number(q.unrealised_gain_aud))) {
+        uglAud = Number(q.unrealised_gain_aud)
+      }
 
       const displayNative = q?.display_native ?? q?.last_price ?? null
       const displayAud = q?.display_aud ?? null

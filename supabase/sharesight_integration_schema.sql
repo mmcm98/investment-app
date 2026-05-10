@@ -143,6 +143,7 @@ create table if not exists public.sharesight_holdings (
   instrument_name text,
   quantity numeric,
   market_value numeric,
+  holding_value_aud numeric,
   cost_basis numeric,
   unrealized_gain_loss numeric,
   currency text,
