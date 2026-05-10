@@ -296,6 +296,277 @@ export function normalizePayout(raw) {
   }
 }
 
+/**
+ * @param {unknown} valuation Sharesight `GET …/valuation.json` payload
+ * @returns {unknown[]}
+ */
+export function parseValuationHoldingsList(valuation) {
+  if (!valuation || typeof valuation !== 'object') return []
+
+  const v = /** @type {Record<string, unknown>} */ (valuation)
+
+  /** @type {unknown[]} */
+  const candidates = []
+
+  if (Array.isArray(v.holdings)) candidates.push(...v.holdings)
+
+  if (Array.isArray(v.portfolio_holdings)) candidates.push(...v.portfolio_holdings)
+
+  const port = v.portfolio
+
+  if (port && typeof port === 'object') {
+    const ph = Reflect.get(/** @type {Record<string, unknown>} */ (port), 'holdings')
+
+    if (Array.isArray(ph)) candidates.push(...ph)
+  }
+
+  if (Array.isArray(v.data)) {
+    for (const chunk of v.data) {
+      if (chunk && typeof chunk === 'object') {
+        const h = Reflect.get(/** @type {Record<string, unknown>} */ (chunk), 'holdings')
+
+        if (Array.isArray(h)) candidates.push(...h)
+      }
+    }
+  }
+
+  return candidates
+}
+
+/**
+ * Index valuation `holdings[]` rows by Sharesight holding id (and instrument id as fallback key).
+ *
+ * @param {unknown} valuation
+ * @returns {Map<string, Record<string, unknown>>}
+ */
+export function indexValuationHoldingsByExternalId(valuation) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const map = new Map()
+
+  for (const item of parseValuationHoldingsList(valuation)) {
+    if (!item || typeof item !== 'object') continue
+
+    const o = /** @type {Record<string, unknown>} */ (item)
+    const hid = coerceString(Reflect.get(o, 'id') ?? Reflect.get(o, 'holding_id'))
+
+    if (hid) map.set(hid, o)
+
+    const inst = Reflect.get(o, 'instrument')
+
+    if (inst && typeof inst === 'object') {
+      const iid = coerceString(Reflect.get(/** @type {Record<string, unknown>} */ (inst), 'id'))
+
+      if (iid) map.set(iid, o)
+    }
+  }
+
+  return map
+}
+
+/**
+ * Merge one valuation holding row into a `sharesight_holdings` upsert row (numeric columns + raw snapshot).
+ *
+ * @param {Record<string, unknown>} row
+ * @param {Record<string, unknown>} valHolding
+ */
+export function applyValuationHoldingToSharesightRow(row, valHolding) {
+  const v = valHolding
+  const qty = pickSharesightQuantityFromRaw(v)
+  const marketVal = coerceNumber(
+    Reflect.get(v, 'market_value') ??
+      Reflect.get(v, 'latest_close_value') ??
+      Reflect.get(v, 'close_value') ??
+      Reflect.get(v, 'value'),
+  )
+  const cost = coerceNumber(
+    Reflect.get(v, 'cost_basis') ??
+      Reflect.get(v, 'opening_cost') ??
+      Reflect.get(v, 'opening_cost_base') ??
+      Reflect.get(v, 'book_cost') ??
+      Reflect.get(v, 'total_cost'),
+  )
+  const ugl = coerceNumber(
+    Reflect.get(v, 'unrealized_gain_loss') ??
+      Reflect.get(v, 'unrealised_gain_loss') ??
+      Reflect.get(v, 'capital_gain') ??
+      Reflect.get(v, 'unrealised_capital_gain'),
+  )
+  const currency = coerceString(
+    Reflect.get(v, 'instrument_currency') ??
+      Reflect.get(v, 'currency_code') ??
+      Reflect.get(v, 'currency') ??
+      `${Reflect.get(row, 'currency') ?? ''}`,
+  )
+
+  const syntheticForAud = /** @type {Record<string, unknown>} */ ({
+    ...v,
+    market_value: marketVal ?? Reflect.get(v, 'market_value'),
+    value: Reflect.get(v, 'value'),
+    portfolio_currency: Reflect.get(v, 'portfolio_currency'),
+    reporting_currency: Reflect.get(v, 'reporting_currency'),
+  })
+
+  let holdingValueAud = pickSharesightHoldingValueAudFromRaw(syntheticForAud)
+
+  if (holdingValueAud == null && currency === 'AUD' && marketVal != null) holdingValueAud = marketVal
+
+  const rawBase =
+    row.raw && typeof row.raw === 'object' ? /** @type {Record<string, unknown>} */ ({ ...row.raw }) : {}
+
+  rawBase.sharesight_valuation_holding = {
+    id: Reflect.get(v, 'id'),
+    quantity: Reflect.get(v, 'quantity'),
+    value: Reflect.get(v, 'value'),
+    market_value: Reflect.get(v, 'market_value'),
+    cost_basis: Reflect.get(v, 'cost_basis'),
+    unrealized_gain_loss: Reflect.get(v, 'unrealized_gain_loss') ?? Reflect.get(v, 'unrealised_gain_loss'),
+  }
+
+  const prevQty = coerceNumber(Reflect.get(row, 'quantity'))
+  const prevMv = coerceNumber(Reflect.get(row, 'market_value'))
+  const prevHv = coerceNumber(Reflect.get(row, 'holding_value_aud'))
+  const prevCost = coerceNumber(Reflect.get(row, 'cost_basis'))
+  const prevUgl = coerceNumber(Reflect.get(row, 'unrealized_gain_loss'))
+
+  return {
+    ...row,
+    quantity: qty != null ? qty : prevQty,
+    market_value: marketVal != null ? marketVal : prevMv,
+    holding_value_aud: holdingValueAud != null ? holdingValueAud : prevHv,
+    cost_basis: cost != null ? cost : prevCost,
+    unrealized_gain_loss: ugl != null ? ugl : prevUgl,
+    currency: currency || `${Reflect.get(row, 'currency') ?? ''}`,
+    raw: rawBase,
+  }
+}
+
+/**
+ * Collect arrays that may contain holding-level rows from a performance API payload (shape varies).
+ *
+ * @param {unknown} performance
+ * @returns {unknown[]}
+ */
+export function collectPerformanceHoldingLikeRows(performance) {
+  if (!performance || typeof performance !== 'object') return []
+
+  const p = /** @type {Record<string, unknown>} */ (performance)
+  /** @type {unknown[]} */
+  const out = []
+
+  for (const k of ['holdings', 'open_positions', 'positions', 'portfolio_holdings']) {
+    const a = Reflect.get(p, k)
+
+    if (Array.isArray(a)) out.push(...a)
+  }
+
+  const port = Reflect.get(p, 'portfolio')
+
+  if (port && typeof port === 'object') {
+    const h = Reflect.get(/** @type {Record<string, unknown>} */ (port), 'holdings')
+
+    if (Array.isArray(h)) out.push(...h)
+  }
+
+  return out
+}
+
+/**
+ * @param {unknown} performance
+ * @returns {Map<string, Record<string, unknown>>}
+ */
+export function indexPerformanceHoldingsByExternalId(performance) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const map = new Map()
+
+  for (const item of collectPerformanceHoldingLikeRows(performance)) {
+    if (!item || typeof item !== 'object') continue
+
+    const o = /** @type {Record<string, unknown>} */ (item)
+    const hid = coerceString(Reflect.get(o, 'id') ?? Reflect.get(o, 'holding_id'))
+
+    if (hid) map.set(hid, o)
+
+    const inst = Reflect.get(o, 'instrument')
+
+    if (inst && typeof inst === 'object') {
+      const iid = coerceString(Reflect.get(/** @type {Record<string, unknown>} */ (inst), 'id'))
+
+      if (iid) map.set(iid, o)
+    }
+  }
+
+  return map
+}
+
+/**
+ * Fill only **null** numeric fields on a holding row from a performance payload row (backup when valuation omits fields).
+ *
+ * @param {Record<string, unknown>} row
+ * @param {Record<string, unknown>} perfRow
+ */
+export function applyPerformanceHoldingFillGaps(row, perfRow) {
+  const qty = pickSharesightQuantityFromRaw(perfRow)
+  const marketVal = coerceNumber(
+    Reflect.get(perfRow, 'market_value') ??
+      Reflect.get(perfRow, 'value') ??
+      Reflect.get(perfRow, 'latest_close_value'),
+  )
+  const cost = coerceNumber(
+    Reflect.get(perfRow, 'cost_basis') ?? Reflect.get(perfRow, 'opening_cost') ?? Reflect.get(perfRow, 'book_cost'),
+  )
+  const ugl = coerceNumber(
+    Reflect.get(perfRow, 'unrealized_gain_loss') ?? Reflect.get(perfRow, 'unrealised_gain_loss'),
+  )
+
+  const prevQty = coerceNumber(Reflect.get(row, 'quantity'))
+  const prevMv = coerceNumber(Reflect.get(row, 'market_value'))
+  const prevCost = coerceNumber(Reflect.get(row, 'cost_basis'))
+  const prevUgl = coerceNumber(Reflect.get(row, 'unrealized_gain_loss'))
+
+  const currency = coerceString(
+    Reflect.get(perfRow, 'instrument_currency') ??
+      Reflect.get(perfRow, 'currency_code') ??
+      `${Reflect.get(row, 'currency') ?? ''}`,
+  )
+
+  const nextQty = prevQty == null && qty != null ? qty : prevQty
+  const nextMv = prevMv == null && marketVal != null ? marketVal : prevMv
+  const nextCost = prevCost == null && cost != null ? cost : prevCost
+  const nextUgl = prevUgl == null && ugl != null ? ugl : prevUgl
+
+  let nextHv = coerceNumber(Reflect.get(row, 'holding_value_aud'))
+
+  if (nextHv == null) {
+    const syn = /** @type {Record<string, unknown>} */ ({ ...perfRow, market_value: nextMv ?? marketVal })
+    const fromPick = pickSharesightHoldingValueAudFromRaw(syn)
+    const cur = currency || `${Reflect.get(row, 'currency') ?? ''}`
+
+    nextHv = fromPick != null ? fromPick : cur === 'AUD' && nextMv != null ? nextMv : null
+  }
+
+  const rawBase =
+    row.raw && typeof row.raw === 'object' ? /** @type {Record<string, unknown>} */ ({ ...row.raw }) : {}
+
+  rawBase.sharesight_performance_holding = {
+    id: Reflect.get(perfRow, 'id'),
+    quantity: Reflect.get(perfRow, 'quantity'),
+    value: Reflect.get(perfRow, 'value'),
+    market_value: Reflect.get(perfRow, 'market_value'),
+    cost_basis: Reflect.get(perfRow, 'cost_basis'),
+  }
+
+  return {
+    ...row,
+    quantity: nextQty,
+    market_value: nextMv,
+    cost_basis: nextCost,
+    unrealized_gain_loss: nextUgl,
+    holding_value_aud: nextHv != null ? nextHv : Reflect.get(row, 'holding_value_aud'),
+    currency: currency || `${Reflect.get(row, 'currency') ?? ''}`,
+    raw: rawBase,
+  }
+}
+
 /** @param {unknown} valuation */
 export function extractCashBalancesFromValuationPayload(valuation) {
   /** @type {Array<{ account_key: string, label?: string, currency?: string, balance?: number|null, raw: Record<string, unknown> }>} */

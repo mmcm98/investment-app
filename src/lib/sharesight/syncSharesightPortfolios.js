@@ -13,6 +13,11 @@ import {
   normalizeTrade,
   normalizePayout,
   extractCashBalancesFromValuationPayload,
+  parseValuationHoldingsList,
+  indexValuationHoldingsByExternalId,
+  applyValuationHoldingToSharesightRow,
+  indexPerformanceHoldingsByExternalId,
+  applyPerformanceHoldingFillGaps,
 } from './normalizePayloads.js'
 import {
   fetchSharesightOAuthRow,
@@ -140,6 +145,44 @@ function logSharesightHoldingRawSampleForDebug(holdingsRaw, tickerNeedle, ctx) {
     tickerNeedle: needle,
     holdingCount: holdingsRaw.length,
     hint: 'No holding matched this ticker; check instrument code in Sharesight vs search string.',
+  })
+}
+
+/**
+ * @param {unknown} valuation
+ * @param {{ portfolio_role?: string, portfolio_external_id?: string }} ctx
+ */
+function logValuationResponseSample(valuation, ctx) {
+  if (!valuation || typeof valuation !== 'object') {
+    console.info('[sharesight-sync] valuation_response_sample', {
+      ...ctx,
+      present: false,
+    })
+
+    return
+  }
+
+  const list = parseValuationHoldingsList(valuation)
+  const first = list[0] && typeof list[0] === 'object' ? Object.keys(/** @type {Record<string, unknown>} */ (list[0])) : null
+
+  /** @type {string} */
+  let json
+
+  try {
+    const s = JSON.stringify(valuation)
+
+    json = s.length > 14_000 ? `${s.slice(0, 14_000)}…(truncated)` : s
+  } catch (e) {
+    json = `(unserializable: ${e instanceof Error ? e.message : String(e)})`
+  }
+
+  console.info('[sharesight-sync] valuation_response_sample', {
+    ...ctx,
+    present: true,
+    topLevelKeys: Object.keys(/** @type {Record<string, unknown>} */ (valuation)),
+    valuationHoldingsCount: list.length,
+    firstHoldingKeys: first,
+    json,
   })
 }
 
@@ -340,23 +383,6 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}`,
     )
 
-    const ghhNorm = dedupedHoldings.find((r) => `${r.instrument_symbol ?? ''}`.toUpperCase().includes('GHHF'))
-
-    if (ghhNorm) {
-      console.info('[sharesight-sync] ghh_f_normalized_upsert_row', {
-        holding_external_id: ghhNorm.holding_external_id,
-        instrument_symbol: ghhNorm.instrument_symbol,
-        quantity: ghhNorm.quantity,
-        market_value: ghhNorm.market_value,
-        holding_value_aud: ghhNorm.holding_value_aud,
-        cost_basis: ghhNorm.cost_basis,
-        unrealized_gain_loss: ghhNorm.unrealized_gain_loss,
-        currency: ghhNorm.currency,
-      })
-    }
-
-    await upsertChunks(supabase, 'sharesight_holdings', dedupedHoldings, UPSERT_HOLDINGS_ON)
-
     /** @type {any} */
     let valuationPayload = null
 
@@ -388,6 +414,58 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     } catch (reason) {
       warnings.push(`Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
+
+    logValuationResponseSample(valuationPayload, {
+      portfolio_role: portfolioRole,
+      portfolio_external_id: portfolioId,
+    })
+
+    const valuationById = indexValuationHoldingsByExternalId(valuationPayload)
+    const performanceById = indexPerformanceHoldingsByExternalId(performancePayload)
+
+    console.info('[sharesight-sync] performance_holding_index', {
+      portfolio_role: portfolioRole,
+      portfolio_external_id: portfolioId,
+      indexedHoldingRows: performanceById.size,
+      performanceTopKeys:
+        performancePayload && typeof performancePayload === 'object'
+          ? Object.keys(/** @type {Record<string, unknown>} */ (performancePayload))
+          : [],
+    })
+
+    const holdingsForUpsert = dedupedHoldings.map((row) => {
+      const r = /** @type {Record<string, unknown>} */ (row)
+      const hid = `${r.holding_external_id ?? ''}`.trim()
+
+      let out = r
+
+      const vh = hid ? valuationById.get(hid) : undefined
+
+      if (vh) out = applyValuationHoldingToSharesightRow(out, vh)
+
+      const ph = hid ? performanceById.get(hid) : undefined
+
+      if (ph) out = applyPerformanceHoldingFillGaps(out, ph)
+
+      return out
+    })
+
+    const ghhNorm = holdingsForUpsert.find((r) => `${r.instrument_symbol ?? ''}`.toUpperCase().includes('GHHF'))
+
+    if (ghhNorm) {
+      console.info('[sharesight-sync] ghh_f_normalized_upsert_row', {
+        holding_external_id: ghhNorm.holding_external_id,
+        instrument_symbol: ghhNorm.instrument_symbol,
+        quantity: ghhNorm.quantity,
+        market_value: ghhNorm.market_value,
+        holding_value_aud: ghhNorm.holding_value_aud,
+        cost_basis: ghhNorm.cost_basis,
+        unrealized_gain_loss: ghhNorm.unrealized_gain_loss,
+        currency: ghhNorm.currency,
+      })
+    }
+
+    await upsertChunks(supabase, 'sharesight_holdings', holdingsForUpsert, UPSERT_HOLDINGS_ON)
 
     if (valuationPayload) {
       try {
