@@ -81,6 +81,69 @@ function dedupeRowsBy(rows, keyOf) {
 }
 
 /**
+ * Log one raw Sharesight holding payload for debugging normalisation (e.g. GHHF).
+ * Safe for production: one structured `console.info` per sync when a match exists.
+ *
+ * @param {unknown[]} holdingsRaw
+ * @param {string} tickerNeedle e.g. `GHHF` — matched case-insensitively on instrument code/symbol/name.
+ * @param {{ portfolio_role?: string, portfolio_external_id?: string }} [ctx]
+ */
+function logSharesightHoldingRawSampleForDebug(holdingsRaw, tickerNeedle, ctx) {
+  const needle = `${tickerNeedle ?? ''}`.trim().toUpperCase()
+
+  if (!needle || !Array.isArray(holdingsRaw)) return
+
+  for (const raw of holdingsRaw) {
+    if (!raw || typeof raw !== 'object') continue
+
+    const h = /** @type {Record<string, unknown>} */ (raw)
+    const inst = h.instrument && typeof h.instrument === 'object' ? /** @type {Record<string, unknown>} */ (h.instrument) : null
+
+    const code = `${inst?.code ?? inst?.symbol ?? inst?.ticker ?? h.code ?? ''}`.trim().toUpperCase()
+    const name = `${inst?.name ?? h.name ?? ''}`.toLowerCase()
+
+    const hit =
+      code.includes(needle) ||
+      name.includes(needle.toLowerCase()) ||
+      `${h.description ?? ''}`.toLowerCase().includes(needle.toLowerCase())
+
+    if (!hit) continue
+
+    try {
+      const json = JSON.stringify(raw)
+      const truncated = json.length > 16_000 ? `${json.slice(0, 16_000)}…(truncated)` : json
+
+      console.info('[sharesight-sync] sample_holding_raw', {
+        portfolio_role: ctx?.portfolio_role,
+        portfolio_external_id: ctx?.portfolio_external_id,
+        tickerNeedle: needle,
+        topLevelKeys: Object.keys(h),
+        instrumentKeys: inst ? Object.keys(inst) : null,
+        json: truncated,
+      })
+    } catch (e) {
+      console.info('[sharesight-sync] sample_holding_raw_unserializable', {
+        portfolio_role: ctx?.portfolio_role,
+        portfolio_external_id: ctx?.portfolio_external_id,
+        tickerNeedle: needle,
+        topLevelKeys: Object.keys(h),
+        err: e instanceof Error ? e.message : String(e),
+      })
+    }
+
+    return
+  }
+
+  console.info('[sharesight-sync] sample_holding_raw_no_match', {
+    portfolio_role: ctx?.portfolio_role,
+    portfolio_external_id: ctx?.portfolio_external_id,
+    tickerNeedle: needle,
+    holdingCount: holdingsRaw.length,
+    hint: 'No holding matched this ticker; check instrument code in Sharesight vs search string.',
+  })
+}
+
+/**
  * INSERT … ON CONFLICT DO UPDATE via PostgREST (survives re-sync and intra-batch duplicates).
  *
  * @template T
@@ -240,6 +303,11 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
         ? holdingsPayload
         : []
 
+    logSharesightHoldingRawSampleForDebug(holdingsRaw, 'GHHF', {
+      portfolio_role: portfolioRole,
+      portfolio_external_id: portfolioId,
+    })
+
     const holdingRows = holdingsRaw
       .map((raw) => {
         const normalized = normalizeHolding(raw)
@@ -271,6 +339,21 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       /** @type {any[]} */ (holdingRows),
       (r) => `${r.user_id}|${r.portfolio_role}|${r.holding_external_id}`,
     )
+
+    const ghhNorm = dedupedHoldings.find((r) => `${r.instrument_symbol ?? ''}`.toUpperCase().includes('GHHF'))
+
+    if (ghhNorm) {
+      console.info('[sharesight-sync] ghh_f_normalized_upsert_row', {
+        holding_external_id: ghhNorm.holding_external_id,
+        instrument_symbol: ghhNorm.instrument_symbol,
+        quantity: ghhNorm.quantity,
+        market_value: ghhNorm.market_value,
+        holding_value_aud: ghhNorm.holding_value_aud,
+        cost_basis: ghhNorm.cost_basis,
+        unrealized_gain_loss: ghhNorm.unrealized_gain_loss,
+        currency: ghhNorm.currency,
+      })
+    }
 
     await upsertChunks(supabase, 'sharesight_holdings', dedupedHoldings, UPSERT_HOLDINGS_ON)
 
