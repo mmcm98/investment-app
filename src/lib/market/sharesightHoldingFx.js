@@ -136,6 +136,38 @@ function classifyExchangeHint(micOrHint) {
   return null
 }
 
+/** @param {unknown} v */
+function normalizeSharesightMarketCode(v) {
+  if (v == null) return ''
+  const s = `${v}`.trim().toUpperCase()
+
+  return s.replace(/\s+/g, '')
+}
+
+/**
+ * @param {Record<string, unknown>} o
+ * @returns {'LSE' | 'AU' | null}
+ */
+function inferExchangeFromInstrumentDecisiveFields(o) {
+  const mc = normalizeSharesightMarketCode(Reflect.get(o, 'market_code'))
+
+  if (mc === 'LSE' || mc === 'XLON' || mc === 'LON' || mc === 'AIM' || mc === 'LSIN') return 'LSE'
+
+  if (mc === 'ASX' || mc === 'XASX' || mc === 'AU' || mc === 'CXA' || mc === 'CHIX' || mc === 'SSX') return 'AU'
+
+  const tzRaw = Reflect.get(o, 'tz_name')
+
+  if (typeof tzRaw === 'string' && tzRaw.trim()) {
+    const tz = tzRaw.trim()
+
+    if (/europe\/london/i.test(tz) || /\/london$/i.test(tz)) return 'LSE'
+
+    if (/australia\/(sydney|melbourne|perth|brisbane|adelaide|darwin|hobart)/i.test(tz)) return 'AU'
+  }
+
+  return null
+}
+
 export function inferExchangeShortNameFromSharesightRaw(raw, instrumentSymbol) {
   const inst = pickInstrument(raw)
 
@@ -144,8 +176,13 @@ export function inferExchangeShortNameFromSharesightRaw(raw, instrumentSymbol) {
 
   if (inst && typeof inst === 'object') {
     const o = /** @type {Record<string, unknown>} */ (inst)
+    const decisive = inferExchangeFromInstrumentDecisiveFields(o)
+
+    if (decisive) return decisive
 
     for (const k of [
+      'market_code',
+      'tz_name',
       'exchange',
       'primary_exchange',
       'exchange_code',
@@ -179,6 +216,21 @@ export function inferExchangeShortNameFromSharesightRaw(raw, instrumentSymbol) {
     const c = classifyExchangeHint(h)
 
     if (c) return c
+  }
+
+  // GBP alone is not LSE (many instruments trade in GBP off-LSE). Require another UK/LSE signal.
+  if (inst && typeof inst === 'object') {
+    const o = /** @type {Record<string, unknown>} */ (inst)
+    const cur = `${Reflect.get(o, 'currency_code') ?? Reflect.get(o, 'currency') ?? ''}`.trim().toUpperCase()
+
+    if (cur === 'GBP') {
+      const tzStr = `${Reflect.get(o, 'tz_name') ?? ''}`.trim()
+      const country = `${Reflect.get(o, 'country_code') ?? Reflect.get(o, 'country') ?? ''}`.trim().toUpperCase()
+      const londonTz = /europe\/london/i.test(tzStr) || /\/london$/i.test(tzStr)
+      const gbCountry = country === 'GB' || country === 'GBR' || country === 'UK'
+
+      if (londonTz || gbCountry) return 'LSE'
+    }
   }
 
   const sym = `${instrumentSymbol ?? ''}`.trim().toUpperCase()
