@@ -2,7 +2,12 @@
 
 import { proxiedSharesightUrl } from './proxyFetch.js'
 import { withRetries } from './retry.js'
-import { forceRefreshSharesightAccessToken, SharesightSuspendedError } from './tokenSession.js'
+import {
+  forceRefreshSharesightAccessToken,
+  getSharesightAccessMemoryToken,
+  SharesightSuspendedError,
+} from './tokenSession.js'
+import { flagSharesightReconnectRequired } from './oauthCredentialsRepository.js'
 
 export class SharesightHttpError extends Error {
   /**
@@ -29,6 +34,16 @@ function truncate(text, max) {
 }
 
 /**
+ * @param {string} initialAccessToken
+ * @param {SupabaseClient | undefined} supabase
+ */
+function bearerForRequest(initialAccessToken, supabase) {
+  if (!supabase) return initialAccessToken
+
+  return getSharesightAccessMemoryToken() ?? initialAccessToken
+}
+
+/**
  * @param {string} accessToken
  * @param {string} apiPathSuffix Example: `api/v3/portfolios/123/holdings`
  * @param {{
@@ -40,10 +55,16 @@ function truncate(text, max) {
 export async function sharesightAuthorizedFetch(accessToken, apiPathSuffix, opts) {
   const method = opts?.method ?? 'GET'
   const supabaseForRefresh = opts?.supabase
-  /** @type {string} */
-  let bearer = accessToken
+
+  const networkRetryOpts = {
+    attempts: 3,
+    shouldRetry: (err) =>
+      !(err instanceof SharesightHttpError && (err.status === 401 || err.status === 403)),
+  }
 
   const fetchOnce = async () => {
+    const bearer = bearerForRequest(accessToken, supabaseForRefresh)
+
     const url = new URL(proxiedSharesightUrl(apiPathSuffix), window.location.origin)
 
     const params = opts?.searchParams ?? {}
@@ -77,34 +98,57 @@ export async function sharesightAuthorizedFetch(accessToken, apiPathSuffix, opts
     }
   }
 
-  const networkRetryOpts = {
-    attempts: 3,
-    shouldRetry: (err) =>
-      !(err instanceof SharesightHttpError && (err.status === 401 || err.status === 403)),
-  }
+  let refreshedOnce = false
+  /** Count 401/403 responses after the first silent refresh for this logical request. */
+  let unauthorizedAfterRefresh = 0
 
-  for (let authRound = 0; authRound < 2; authRound += 1) {
+  for (;;) {
     try {
       return await withRetries(async () => fetchOnce(), networkRetryOpts)
     } catch (e) {
       const unauthorized = e instanceof SharesightHttpError && (e.status === 401 || e.status === 403)
-      if (!supabaseForRefresh || !unauthorized || authRound >= 1) throw e
 
-      console.warn('[sharesight/http] unauthorized; attempting silent token refresh before retry', {
-        status: e.status,
-      })
+      if (!unauthorized || !supabaseForRefresh) throw e
+
+      if (!refreshedOnce) {
+        refreshedOnce = true
+
+        console.warn('[sharesight/http] unauthorized; mutex token refresh then retry', { status: e.status })
+
+        try {
+          await forceRefreshSharesightAccessToken(supabaseForRefresh)
+
+          console.info('[sharesight/http] silent token refresh completed; retrying with in-memory bearer')
+        } catch (refreshErr) {
+          const msg = refreshErr instanceof Error ? refreshErr.message : String(refreshErr)
+          console.warn('[sharesight/http] silent token refresh failed', msg)
+          if (refreshErr instanceof SharesightSuspendedError) throw refreshErr
+          throw e
+        }
+
+        continue
+      }
+
+      unauthorizedAfterRefresh += 1
+
+      if (unauthorizedAfterRefresh >= 3) {
+        const reason = `Sharesight returned ${e.status} repeatedly after token refresh (${unauthorizedAfterRefresh} times).`
+
+        console.warn('[sharesight/http] auth_exhausted', { status: e.status, unauthorizedAfterRefresh })
+
+        await flagSharesightReconnectRequired(supabaseForRefresh, reason)
+
+        throw new SharesightSuspendedError(reason)
+      }
 
       try {
-        const next = await forceRefreshSharesightAccessToken(supabaseForRefresh)
-
-        bearer = next.accessToken
-        console.info('[sharesight/http] silent token refresh succeeded; retrying request once')
+        await forceRefreshSharesightAccessToken(supabaseForRefresh)
       } catch (refreshErr) {
-        const msg = refreshErr instanceof Error ? refreshErr.message : String(refreshErr)
-        console.warn('[sharesight/http] silent token refresh failed', msg)
         if (refreshErr instanceof SharesightSuspendedError) throw refreshErr
         throw e
       }
+
+      continue
     }
   }
 }

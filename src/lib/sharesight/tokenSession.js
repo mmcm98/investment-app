@@ -12,9 +12,17 @@ import { withRetries } from './retry.js'
 /** Align with Sharesight expiry windows — rotate before the access token lapses (~5 minutes). */
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000
 
-/** Dedup simultaneous 401-triggered rotations (parallel portfolio fetches). */
-let forceRefreshInFlight =
+/** One in-flight token rotation for proactive + forced refresh (avoids parallel refresh races). */
+let refreshExclusivePromise =
   /** @type {Promise<{ accessToken: string, row: SharesightOAuthRow }> | null} */ (null)
+
+/**
+ * Latest bearer after a successful refresh — used immediately by HTTP layer so parallel callers
+ * do not keep sending the pre-refresh access token string from sync start.
+ *
+ * @type {{ token: string, expiresAtMs: number } | null}
+ */
+let memoryAccess = null
 
 /** @param {string | undefined | null} iso */
 function parseIsoMaybe(iso) {
@@ -22,6 +30,50 @@ function parseIsoMaybe(iso) {
   const ms = Date.parse(iso)
 
   return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * Prefer this bearer for Sharesight API calls when present and not near expiry.
+ *
+ * @returns {string | null}
+ */
+export function getSharesightAccessMemoryToken() {
+  if (!memoryAccess?.token) return null
+
+  if (Date.now() >= memoryAccess.expiresAtMs - REFRESH_BEFORE_EXPIRY_MS) {
+    return null
+  }
+
+  return memoryAccess.token
+}
+
+/**
+ * @param {string} accessToken
+ * @param {number} expiresInSeconds
+ */
+export function setSharesightAccessMemoryToken(accessToken, expiresInSeconds) {
+  const sec = Number.isFinite(expiresInSeconds) && expiresInSeconds > 0 ? expiresInSeconds : 3600
+
+  memoryAccess = {
+    token: accessToken,
+    expiresAtMs: Date.now() + sec * 1000,
+  }
+}
+
+/** @param {SharesightOAuthRow} row */
+export function seedSharesightAccessMemoryFromRow(row) {
+  const expiresMs = parseIsoMaybe(row.access_expires_at)
+
+  if (!row.access_token) return
+
+  memoryAccess = {
+    token: row.access_token,
+    expiresAtMs: expiresMs ?? Date.now() + 3600_000,
+  }
+}
+
+export function clearSharesightAccessMemory() {
+  memoryAccess = null
 }
 
 /** @type {(row?: SharesightOAuthRow | null) => boolean} */
@@ -35,23 +87,22 @@ export function oauthRowNeedsReconnect(row) {
 export function accessTokenExpiresWithinBuffer(row) {
   const expiresMs = parseIsoMaybe(row.access_expires_at)
 
-  // If we can't parse expiry, assume refresh ASAP (but refresh requires refresh_token)
   if (expiresMs === null) return true
 
   return Date.now() >= expiresMs - REFRESH_BEFORE_EXPIRY_MS
 }
 
 /**
- * Rotate access token using refresh_token only (no expiry buffer heuristic).
- *
  * @param {SupabaseClient} supabase
- * @returns {Promise<{ accessToken: string, row: SharesightOAuthRow }>}
+ * @param {'proactive'|'forced'} kind
  */
-async function rotateSharesightTokens(supabase, refreshToken, /** @type {'proactive' | 'forced'} */ kind) {
+async function rotateSharesightTokens(supabase, refreshToken, kind) {
   console.info('[sharesight/oauth] token_refresh_attempt', { kind })
 
   try {
     const refreshed = await withRetries(async () => await refreshAccessToken(refreshToken), { attempts: 3 })
+
+    setSharesightAccessMemoryToken(refreshed.access_token, refreshed.expires_in)
 
     await upsertSharesightOAuthRow(supabase, {
       access_token: refreshed.access_token,
@@ -66,10 +117,13 @@ async function rotateSharesightTokens(supabase, refreshToken, /** @type {'proact
     if (reloadErr) throw reloadErr
     if (!nextRow) throw new Error('Failed to reload Sharesight credentials after refresh')
 
+    seedSharesightAccessMemoryFromRow(nextRow)
+
     console.info('[sharesight/oauth] token_refresh_ok', { kind })
 
     return { accessToken: nextRow.access_token, row: nextRow }
   } catch (error) {
+    clearSharesightAccessMemory()
     const message = error instanceof Error ? error.message : String(error)
     console.warn('[sharesight/oauth] token_refresh_failed', { kind, message })
 
@@ -80,41 +134,50 @@ async function rotateSharesightTokens(supabase, refreshToken, /** @type {'proact
 }
 
 /**
+ * Single mutex: proactive and forced refresh share one in-flight promise.
+ *
+ * @param {SupabaseClient} supabase
+ * @param {'proactive'|'forced'} kind
+ */
+async function refreshSharesightTokensExclusive(supabase, kind) {
+  if (refreshExclusivePromise) return refreshExclusivePromise
+
+  refreshExclusivePromise = (async () => {
+    try {
+      const { data: row, error: loadErr } = await fetchSharesightOAuthRow(supabase)
+
+      if (loadErr) throw loadErr
+
+      if (!row) throw new Error('Sharesight is not connected yet')
+
+      if (oauthRowNeedsReconnect(row)) {
+        throw new SharesightSuspendedError(row.last_auth_error ?? 'Sharesight reconnect is required.')
+      }
+
+      const rt = typeof row.refresh_token === 'string' ? row.refresh_token : ''
+      if (!rt.trim()) {
+        await flagSharesightReconnectRequired(supabase, 'Missing refresh token — please reconnect Sharesight OAuth.')
+
+        throw new SharesightSuspendedError('Missing refresh token — please reconnect Sharesight.')
+      }
+
+      return rotateSharesightTokens(supabase, rt, kind)
+    } finally {
+      refreshExclusivePromise = null
+    }
+  })()
+
+  return refreshExclusivePromise
+}
+
+/**
  * Immediately refresh using the refresh token stored in Supabase (e.g. after HTTP 401).
- * Concurrent callers await the same in-flight rotation.
  *
  * @param {SupabaseClient} supabase
  * @returns {Promise<{ accessToken: string, row: SharesightOAuthRow }>}
  */
 export async function forceRefreshSharesightAccessToken(supabase) {
-  if (forceRefreshInFlight) return forceRefreshInFlight
-
-  const run = /** @returns {Promise<{ accessToken: string, row: SharesightOAuthRow }>} */ async () => {
-    const { data: row, error: loadErr } = await fetchSharesightOAuthRow(supabase)
-
-    if (loadErr) throw loadErr
-
-    if (!row) throw new Error('Sharesight is not connected yet')
-
-    if (oauthRowNeedsReconnect(row)) {
-      throw new SharesightSuspendedError(row.last_auth_error ?? 'Sharesight reconnect is required.')
-    }
-
-    const rt = typeof row.refresh_token === 'string' ? row.refresh_token : ''
-    if (!rt.trim()) {
-      await flagSharesightReconnectRequired(supabase, 'Missing refresh token — please reconnect Sharesight OAuth.')
-
-      throw new SharesightSuspendedError('Missing refresh token — please reconnect Sharesight.')
-    }
-
-    return rotateSharesightTokens(supabase, rt, 'forced')
-  }
-
-  forceRefreshInFlight = run().finally(() => {
-    forceRefreshInFlight = null
-  })
-
-  return forceRefreshInFlight
+  return refreshSharesightTokensExclusive(supabase, 'forced')
 }
 
 /**
@@ -135,20 +198,12 @@ export async function ensureSharesightAccessToken(supabase) {
   }
 
   if (!accessTokenExpiresWithinBuffer(row)) {
+    seedSharesightAccessMemoryFromRow(row)
+
     return { accessToken: row.access_token, row }
   }
 
-  const refreshToken = typeof row.refresh_token === 'string' ? row.refresh_token : ''
-  if (!refreshToken.trim()) {
-    await flagSharesightReconnectRequired(
-      supabase,
-      'Missing refresh token — please reconnect Sharesight OAuth.',
-    )
-
-    throw new SharesightSuspendedError('Missing refresh token — please reconnect Sharesight.')
-  }
-
-  return rotateSharesightTokens(supabase, refreshToken, 'proactive')
+  return refreshSharesightTokensExclusive(supabase, 'proactive')
 }
 
 export class SharesightSuspendedError extends Error {

@@ -1,6 +1,11 @@
 /** @typedef {import('@supabase/supabase-js').SupabaseClient} SupabaseClient */
 
-import { ensureSharesightAccessToken } from './tokenSession.js'
+import {
+  ensureSharesightAccessToken,
+  seedSharesightAccessMemoryFromRow,
+  setSharesightAccessMemoryToken,
+  SharesightSuspendedError,
+} from './tokenSession.js'
 import { sharesightAuthorizedFetch } from './sharesightHttp.js'
 import { getSharesightPortfolioUuids } from './runtimeEnv.js'
 import {
@@ -12,6 +17,7 @@ import {
 import {
   fetchSharesightOAuthRow,
   patchSharesightSyncMeta,
+  patchSharesightTradeCursor,
   upsertSharesightOAuthRow,
 } from './oauthCredentialsRepository.js'
 import { mapWithConcurrency } from './asyncPool.js'
@@ -109,8 +115,28 @@ async function upsertChunks(supabase, table, rows, onConflict, chunkSize = 250) 
  * @param {string} accessToken
  * @param {{ holding_external_id: string }[]} holdings
  */
+/** @param {unknown} raw */
+function tradeExecutedAtMs(raw) {
+  if (!raw || typeof raw !== 'object') return 0
+
+  /** @type {any} */
+  const t = raw
+  const s = String(t.trade_date ?? t.transaction_date ?? t.date ?? t.trade_placed_at ?? '').trim()
+
+  if (!s) return 0
+
+  const ms = Date.parse(s)
+
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/** First full trades import: cap total rows. Incremental: fetch newer than cursor only. */
+const TRADES_FIRST_SYNC_MAX = 500
+
+const TRADES_INCREMENTAL_MAX_PAGES = 40
+
 async function syncIncomeForHoldings(supabase, accessToken, holdings) {
-  const incomeRowsToInsert = await mapWithConcurrency(5, holdings, async (h) => {
+  const incomeRowsToInsert = await mapWithConcurrency(2, holdings, async (h) => {
     const payoutsJson = /** @type {any} */ (
       await sharesightAuthorizedFetch(
         accessToken,
@@ -150,22 +176,20 @@ async function deletePortfolioSnapshotRows(supabase, userId, portfolioRole, port
     'sharesight_income_events',
   ])
 
-  await Promise.all(
-    tables.map(async (table) => {
-      const { error } = await supabase
-        .from(table)
-        .delete()
-        .eq('user_id', userId)
-        .eq('portfolio_role', portfolioRole)
-        .eq('portfolio_external_id', portfolioId)
+  for (const table of tables) {
+    const { error } = await supabase
+      .from(table)
+      .delete()
+      .eq('user_id', userId)
+      .eq('portfolio_role', portfolioRole)
+      .eq('portfolio_external_id', portfolioId)
 
-      if (error) throw error
-    }),
-  )
+    if (error) throw error
+  }
 }
 
 /**
- * Parallel API fetch for holdings, valuation (cash), and performance — then upsert holdings, then cash + performance.
+ * Sequential Sharesight API fetch (holdings → valuation → performance) to reduce parallel 401 pressure.
  *
  * @param {SupabaseClient} supabase
  * @param {string} accessToken
@@ -186,24 +210,17 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
   try {
     await deletePortfolioSnapshotRows(supabase, userId, portfolioRole, portfolioId)
 
-    const settled = await Promise.allSettled([
-      sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/holdings`, { supabase }),
-      sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/valuation.json`, { supabase }),
-      sharesightAuthorizedFetch(accessToken, `api/v2.1/portfolios/${safePortfolioPath}/performance.json`, {
-        supabase,
-        searchParams: {
-          start_date: '2000-01-01',
-          end_date: isoDateUtc(),
-        },
-      }),
-    ])
+    /** @type {any} */
+    let holdingsPayload
 
-    const holdingsSettled = settled[0]
-
-    if (holdingsSettled.status !== 'fulfilled') {
-      warnings.push(
-        `Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(holdingsSettled.status === 'rejected' ? holdingsSettled.reason : 'Unknown holdings response')}`,
+    try {
+      holdingsPayload = await sharesightAuthorizedFetch(
+        accessToken,
+        `api/v3/portfolios/${safePortfolioPath}/holdings`,
+        { supabase },
       )
+    } catch (reason) {
+      warnings.push(`Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
 
       return {
         holdingsOk: false,
@@ -213,8 +230,6 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
         portfolioHoldingKeys: /** @type {{ holding_external_id: string }[]} */ ([]),
       }
     }
-
-    const holdingsPayload = /** @type {any} */ (holdingsSettled.value)
 
     /** @type {{ holding_external_id: string }[]} */
     const portfolioHoldingKeys = []
@@ -258,31 +273,39 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
     await upsertChunks(supabase, 'sharesight_holdings', dedupedHoldings, UPSERT_HOLDINGS_ON)
 
-    const valuationPayload =
-      settled[1].status === 'fulfilled' ? /** @type {any} */ (settled[1].value) : null
+    /** @type {any} */
+    let valuationPayload = null
 
-    if (settled[1].status !== 'fulfilled') {
-      warnings.push(
-        `Valuation fetch failed (${portfolioRole}): ${formatErrorBestEffort(
-          settled[1].status === 'rejected' ? settled[1].reason : 'Unknown',
-        )}`,
+    try {
+      valuationPayload = await sharesightAuthorizedFetch(
+        accessToken,
+        `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
+        { supabase },
       )
+    } catch (reason) {
+      warnings.push(`Valuation fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
 
-    const performancePayload =
-      settled[2].status === 'fulfilled' ? /** @type {any} */ (settled[2].value) : null
+    /** @type {any} */
+    let performancePayload = null
 
-    if (settled[2].status !== 'fulfilled') {
-      warnings.push(
-        `Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(
-          settled[2].status === 'rejected' ? settled[2].reason : 'Unknown',
-        )}`,
+    try {
+      performancePayload = await sharesightAuthorizedFetch(
+        accessToken,
+        `api/v2.1/portfolios/${safePortfolioPath}/performance.json`,
+        {
+          supabase,
+          searchParams: {
+            start_date: '2000-01-01',
+            end_date: isoDateUtc(),
+          },
+        },
       )
+    } catch (reason) {
+      warnings.push(`Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
 
-    const cashUpsertPromise = (async () => {
-      if (!valuationPayload) return undefined
-
+    if (valuationPayload) {
       try {
         const cashRowsRaw = extractCashBalancesFromValuationPayload(valuationPayload).map((c) => ({
           user_id: userId,
@@ -305,13 +328,9 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       } catch (error) {
         warnings.push(`Valuation / cash balances import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
       }
+    }
 
-      return undefined
-    })()
-
-    const perfUpsertPromise = (async () => {
-      if (!performancePayload) return undefined
-
+    if (performancePayload) {
       try {
         const endDate = isoDateUtc()
 
@@ -335,11 +354,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       } catch (error) {
         warnings.push(`Performance import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
       }
-
-      return undefined
-    })()
-
-    await Promise.all([cashUpsertPromise, perfUpsertPromise])
+    }
 
     return {
       holdingsOk: true,
@@ -368,20 +383,40 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
  * @param {string} syncRunId
  * @param {'core'|'satellite'} portfolioRole
  * @param {string} portfolioId
+ * @param {string | null | undefined} tradesCursorIso Newest trade time already synced (incremental watermark)
  */
-async function syncPortfolioTrades(supabase, accessToken, userId, syncRunId, portfolioRole, portfolioId) {
+async function syncPortfolioTrades(
+  supabase,
+  accessToken,
+  userId,
+  syncRunId,
+  portfolioRole,
+  portfolioId,
+  tradesCursorIso,
+) {
   const safePortfolioPath = encodeURIComponent(portfolioId)
+
+  const cursorMs = tradesCursorIso ? Date.parse(`${tradesCursorIso}`) : NaN
+  const hasCursor = Number.isFinite(cursorMs)
 
   try {
     const tradesAll = []
 
-    for (let page = 1; page <= 250; page += 1) {
-      /** @type {any} */
+    const maxPages = hasCursor ? TRADES_INCREMENTAL_MAX_PAGES : 250
 
+    for (let page = 1; page <= maxPages; page += 1) {
+      /** @type {Record<string, string | number>} */
+      const searchParams = { page }
+
+      if (hasCursor) {
+        searchParams.start_date = new Date(cursorMs).toISOString().slice(0, 10)
+      }
+
+      /** @type {any} */
       const tradesPayload = /** @type {any} */ (
         await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/trades.json`, {
           supabase,
-          searchParams: { page },
+          searchParams,
         })
       )
 
@@ -393,7 +428,23 @@ async function syncPortfolioTrades(supabase, accessToken, userId, syncRunId, por
 
       if (pageTrades.length === 0) break
 
-      tradesAll.push(...pageTrades)
+      if (hasCursor) {
+        const allOlderOrEqual = pageTrades.every((t) => tradeExecutedAtMs(t) <= cursorMs)
+
+        for (const t of pageTrades) {
+          if (tradeExecutedAtMs(t) > cursorMs) tradesAll.push(t)
+        }
+
+        if (allOlderOrEqual) break
+      } else {
+        for (const t of pageTrades) {
+          if (tradesAll.length >= TRADES_FIRST_SYNC_MAX) break
+
+          tradesAll.push(t)
+        }
+
+        if (tradesAll.length >= TRADES_FIRST_SYNC_MAX) break
+      }
     }
 
     const tradeRows = tradesAll
@@ -419,6 +470,20 @@ async function syncPortfolioTrades(supabase, accessToken, userId, syncRunId, por
     )
 
     await upsertChunks(supabase, 'sharesight_trades', dedupedTrades, UPSERT_TRADES_ON)
+
+    let maxTradeMs = 0
+
+    for (const t of tradesAll) {
+      maxTradeMs = Math.max(maxTradeMs, tradeExecutedAtMs(t))
+    }
+
+    if (maxTradeMs > 0) {
+      const nextCursor = new Date(maxTradeMs).toISOString()
+
+      if (!hasCursor || maxTradeMs > cursorMs) {
+        await patchSharesightTradeCursor(supabase, portfolioRole, nextCursor)
+      }
+    }
 
     return null
   } catch (error) {
@@ -513,6 +578,7 @@ export async function syncSharesightPortfolios(supabase, args) {
     const ensured = await ensureSharesightAccessToken(supabase)
 
     accessToken = ensured.accessToken
+    seedSharesightAccessMemoryFromRow(ensured.row)
   } catch (error) {
     const message = formatErrorBestEffort(error)
 
@@ -548,19 +614,28 @@ export async function syncSharesightPortfolios(supabase, args) {
 
     /** Dual labels mirror the Sharesight workloads (parallel per portfolio vs sequential UI copy). */
 
-    report('Syncing holdings…')
+    report('Syncing holdings (core, then satellite)…')
 
-    /** Core + Satellite: parallel deletes, parallel Sharesight pulls, holdings upsert, then parallel cash & performance upserts. */
+    const { data: oauthRow } = await fetchSharesightOAuthRow(supabase)
 
-    const phase1Task = Promise.all(
-      targets.map((target) =>
-        syncPortfolioHoldingsCashPerf(supabase, /** @type {string} */ (accessToken), userId, syncRunId, target),
-      ),
-    )
+    const cursorCore = oauthRow?.trades_cursor_core ?? null
+    const cursorSat = oauthRow?.trades_cursor_satellite ?? null
 
-    report('Syncing cash balances & performance…')
+    /** Core then satellite — sequential to reduce parallel 401 pressure. */
 
-    const phase1 = await phase1Task
+    const phase1 = []
+
+    for (const target of targets) {
+      const pr = await syncPortfolioHoldingsCashPerf(
+        supabase,
+        /** @type {string} */ (accessToken),
+        userId,
+        syncRunId,
+        target,
+      )
+
+      phase1.push(pr)
+    }
 
     for (const p of phase1) partialWarnings.push(...p.warnings)
 
@@ -570,42 +645,35 @@ export async function syncSharesightPortfolios(supabase, args) {
       /** Trades: after holdings IDs exist; portfolios run concurrently (different portfolio_role keys). Pagination stays sequential per portfolio */
       report('Syncing trade history…')
 
-      const tradeWarns = await Promise.all(
-        phase1.map((prt) =>
-          syncPortfolioTrades(
-            supabase,
-            /** @type {string} */ (accessToken),
-            userId,
-            syncRunId,
-            prt.portfolioRole,
-            prt.portfolioId,
-          ),
-        ),
-      )
+      for (const prt of phase1) {
+        const tradesCursor = prt.portfolioRole === 'core' ? cursorCore : cursorSat
 
-      for (const tw of tradeWarns) {
+        const tw = await syncPortfolioTrades(
+          supabase,
+          /** @type {string} */ (accessToken),
+          userId,
+          syncRunId,
+          prt.portfolioRole,
+          prt.portfolioId,
+          tradesCursor,
+        )
+
         if (typeof tw === 'string') partialWarnings.push(tw)
       }
 
-      /** Income: sequential after trades globally; holdings keys from phase1; parallel across portfolios */
-
       report('Syncing income & distributions…')
 
-      const incomeWarns = await Promise.all(
-        phase1.map((prt) =>
-          syncPortfolioIncome(
-            supabase,
-            /** @type {string} */ (accessToken),
-            userId,
-            syncRunId,
-            prt.portfolioRole,
-            prt.portfolioId,
-            prt.portfolioHoldingKeys,
-          ),
-        ),
-      )
+      for (const prt of phase1) {
+        const iw = await syncPortfolioIncome(
+          supabase,
+          /** @type {string} */ (accessToken),
+          userId,
+          syncRunId,
+          prt.portfolioRole,
+          prt.portfolioId,
+          prt.portfolioHoldingKeys,
+        )
 
-      for (const iw of incomeWarns) {
         if (typeof iw === 'string') partialWarnings.push(iw)
       }
     }
@@ -664,6 +732,19 @@ export async function syncSharesightPortfolios(supabase, args) {
   } catch (error) {
     const message = formatErrorBestEffort(error)
 
+    if (error instanceof SharesightSuspendedError && !finalizedThisSyncRun) {
+      await patchSharesightSyncMeta(supabase, {
+        last_sync_error: message,
+      })
+
+      await finalizeSharesightSyncRun(supabase, syncRunId, {
+        status: 'partial',
+        error_message: message,
+      })
+
+      throw error
+    }
+
     if (!finalizedThisSyncRun) {
       await patchSharesightSyncMeta(supabase, {
         last_sync_error: message,
@@ -704,4 +785,6 @@ export async function persistFreshSharesightOAuthTokens(supabase, tokenPayload) 
     reconnect_required: false,
     clear_auth_error: true,
   })
+
+  setSharesightAccessMemoryToken(tokenPayload.access_token, tokenPayload.expires_in)
 }

@@ -14,6 +14,8 @@
  * @property {string | null | undefined} last_successful_sync_at
  * @property {string | null | undefined} last_sync_attempt_at
  * @property {string | null | undefined} last_sync_error
+ * @property {string | null | undefined} trades_cursor_core
+ * @property {string | null | undefined} trades_cursor_satellite
  */
 
 /**
@@ -42,7 +44,9 @@ export async function fetchSharesightOAuthRow(supabase) {
         last_auth_error,
         last_successful_sync_at,
         last_sync_attempt_at,
-        last_sync_error
+        last_sync_error,
+        trades_cursor_core,
+        trades_cursor_satellite
       `,
     )
     .eq('user_id', userId)
@@ -89,6 +93,28 @@ export async function upsertSharesightOAuthRow(supabase, tokens) {
   }
 
   const { error } = await supabase.from('sharesight_oauth_credentials').upsert(payload, { onConflict: 'user_id' })
+
+  if (error) throw error
+}
+
+/**
+ * @param {SupabaseClient} supabase
+ * @param {'core'|'satellite'} portfolioRole
+ * @param {string | null} cursorIso ISO-8601 timestamptz string (newest trade synced at this watermark)
+ */
+export async function patchSharesightTradeCursor(supabase, portfolioRole, cursorIso) {
+  const { data: userData, error: userErr } = await supabase.auth.getUser()
+  if (userErr) throw userErr
+
+  const userId = userData?.user?.id
+  if (!userId) throw new Error('Not authenticated')
+
+  const patch =
+    portfolioRole === 'core'
+      ? { trades_cursor_core: cursorIso }
+      : { trades_cursor_satellite: cursorIso }
+
+  const { error } = await supabase.from('sharesight_oauth_credentials').update(patch).eq('user_id', userId)
 
   if (error) throw error
 }
