@@ -13,6 +13,38 @@ function pickInstrument(raw) {
 }
 
 /**
+ * Code used for Yahoo/FMP mapping when `instrument_symbol` is blank (common right after sync).
+ *
+ * @param {{ instrument_symbol: string | null, raw: Record<string, unknown> }} row
+ */
+export function resolveInstrumentCodeForQuote(row) {
+  const direct = `${row.instrument_symbol ?? ''}`.trim()
+
+  if (direct) return direct
+
+  const raw = row.raw
+
+  if (!raw || typeof raw !== 'object') return ''
+
+  const inst = pickInstrument(raw)
+
+  if (inst && typeof inst === 'object') {
+    const code =
+      Reflect.get(inst, 'code') ??
+      Reflect.get(inst, 'symbol') ??
+      Reflect.get(inst, 'ticker') ??
+      Reflect.get(inst, 'yahoo_symbol')
+
+    if (typeof code === 'string' && code.trim()) return code.trim()
+  }
+
+  const top =
+    Reflect.get(raw, 'code') ?? Reflect.get(raw, 'symbol') ?? Reflect.get(raw, 'ticker') ?? Reflect.get(raw, 'yahoo_symbol')
+
+  return typeof top === 'string' ? top.trim() : ''
+}
+
+/**
  * Best-effort FMP-style exchange short name for mapping + market hours.
  *
  * @param {Record<string, unknown>} raw
@@ -79,14 +111,17 @@ export function inferFmpSymbol(instrumentSymbol, exchangeShort) {
  * }} row
  */
 export function resolveQuoteIdentity(row) {
-  const instrumentSymbol = `${row.instrument_symbol ?? ''}`.trim()
+  const instrumentCode = resolveInstrumentCodeForQuote(row)
 
-  const exchangeShort = inferExchangeShortNameFromSharesightRaw(row.raw, instrumentSymbol)
-  const fmpSymbol = inferFmpSymbol(instrumentSymbol, exchangeShort)
-  const yahooSymbol = deriveYahooSymbolFromFmp({ fmpSymbol: instrumentSymbol || fmpSymbol, exchangeShortName: exchangeShort })
+  const exchangeShort = inferExchangeShortNameFromSharesightRaw(row.raw, instrumentCode)
+  const fmpSymbol = inferFmpSymbol(instrumentCode, exchangeShort)
+  const yahooSymbol = deriveYahooSymbolFromFmp({
+    fmpSymbol: instrumentCode || fmpSymbol,
+    exchangeShortName: exchangeShort,
+  })
 
   return {
-    fmpSymbol: fmpSymbol || instrumentSymbol,
+    fmpSymbol: fmpSymbol || instrumentCode,
     exchangeShortName: exchangeShort,
     yahooSymbol,
   }

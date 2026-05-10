@@ -11,7 +11,8 @@ import {
 import { useSharesightIntegration } from './SharesightIntegrationContext.jsx'
 import { audPerForeignUnit, deriveYahooFxSymbol, uniqueFxPairsForCurrencies } from '../lib/market/fxPairs.js'
 import { isLivePriceWindowActiveForExchange } from '../lib/market/exchangeSessions.js'
-import { resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
+import { resolveInstrumentCodeForQuote, resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
+import { yahooSymbolsLooselyEqual } from '../lib/market/tickerMap.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
 import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
@@ -76,6 +77,48 @@ const BASE_FX_TO_CCY = { 'USDAUD=X': 'USD', 'EURAUD=X': 'EUR', 'GBPAUD=X': 'GBP'
 /** @param {{ portfolio_role: string, holding_external_id: string }} k */
 function holdingKey(k) {
   return `${k.portfolio_role}:${k.holding_external_id}`
+}
+
+/**
+ * @param {any[]} holdings
+ * @param {string} quoteSymbolFromApi
+ */
+function listHoldingsMatchingQuoteSymbol(holdings, quoteSymbolFromApi) {
+  /** @type {any[]} */
+  const out = []
+
+  for (const h of holdings) {
+    const id = resolveQuoteIdentity(h)
+
+    if (!`${id.yahooSymbol ?? ''}`.trim()) continue
+
+    if (yahooSymbolsLooselyEqual(id.yahooSymbol, quoteSymbolFromApi)) out.push(h)
+  }
+
+  return out
+}
+
+/**
+ * Quote symbols that returned a numeric last but did not map to any holding Yahoo identity.
+ *
+ * @param {Record<string, unknown>[]} quotes
+ * @param {any[]} holdings
+ */
+function quotesSymbolsUnmatchedToHoldings(quotes, holdings) {
+  /** @type {string[]} */
+  const out = []
+
+  for (const q of quotes) {
+    const sym = `${Reflect.get(q, 'symbol') ?? ''}`.trim()
+
+    if (!sym) continue
+
+    if (numOrNull(Reflect.get(q, 'last')) == null) continue
+
+    if (listHoldingsMatchingQuoteSymbol(holdings, sym).length === 0) out.push(sym)
+  }
+
+  return out
 }
 
 /** @param {string|null|undefined} c */
@@ -390,15 +433,28 @@ export function LivePricesProvider({ children }) {
               .map((h) => {
                 const id = resolveQuoteIdentity(h)
 
+                if (!`${id.yahooSymbol ?? ''}`.trim()) return null
+
                 return { yahooSymbol: id.yahooSymbol, fmpSymbol: id.fmpSymbol, exchangeShort: id.exchangeShortName }
               })
+              .filter(Boolean)
           : []
 
       if (items.length > 0) {
+        const holdingDebug = holdings.map((h) => ({
+          holding_external_id: h.holding_external_id,
+          portfolio_role: h.portfolio_role,
+          instrument_symbol: h.instrument_symbol,
+          resolved_code: resolveInstrumentCodeForQuote(h),
+          yahoo_symbol: resolveQuoteIdentity(h).yahooSymbol,
+        }))
+
         console.info('[live-prices] quotes_fetch_attempt', {
           holdings: holdings.length,
           quoteItems: items.length,
           hasMarketSecret: Boolean(`${import.meta.env.VITE_MARKET_API_SECRET ?? ''}`.trim()),
+          fetchYahooSymbols: items.map((it) => it.yahooSymbol),
+          holdingDebug,
         })
 
         const qResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'quotes', items }))
@@ -415,31 +471,30 @@ export function LivePricesProvider({ children }) {
         const upserts = []
 
         for (const q of quotes) {
-            const sym = `${Reflect.get(q, 'symbol') ?? ''}`.trim().toUpperCase()
+          const symRaw = `${Reflect.get(q, 'symbol') ?? ''}`.trim()
 
-            const holding = holdings.find((hh) => resolveQuoteIdentity(hh).yahooSymbol === sym)
+          const matchHoldings = listHoldingsMatchingQuoteSymbol(holdings, symRaw)
 
-            if (!holding) continue
+          const last = Reflect.get(q, 'last')
+          const prev = Reflect.get(q, 'previous_close')
+          const chg = Reflect.get(q, 'change_percent')
+          const src = Reflect.get(q, 'source')
+          const curFromQuote = Reflect.get(q, 'currency')
 
+          const lastNum = numOrNull(last)
+
+          if (lastNum == null) continue
+
+          const prevNum = numOrNull(prev)
+          const chgNum = numOrNull(chg)
+
+          for (const holding of matchHoldings) {
             const id = resolveQuoteIdentity(holding)
-
-            const last = Reflect.get(q, 'last')
-            const prev = Reflect.get(q, 'previous_close')
-            const chg = Reflect.get(q, 'change_percent')
-            const src = Reflect.get(q, 'source')
-            const curFromQuote = Reflect.get(q, 'currency')
 
             const quoteCurrency =
               typeof curFromQuote === 'string' && curFromQuote.trim()
                 ? curFromQuote.trim().toUpperCase()
                 : currencyIso(holding.currency)
-
-            const lastNum = numOrNull(last)
-
-            if (lastNum == null) continue
-
-            const prevNum = numOrNull(prev)
-            const chgNum = numOrNull(chg)
 
             const snap = snapshotRef.current.get(holdingKey(holding))
 
@@ -467,6 +522,7 @@ export function LivePricesProvider({ children }) {
               ath_computed_at: Reflect.get(snap ?? {}, 'ath_computed_at'),
               updated_at: nowIso,
             })
+          }
         }
 
         if (upserts.length > 0) {
@@ -478,9 +534,20 @@ export function LivePricesProvider({ children }) {
 
           console.info('[live-prices] market_quote_snapshots_upsert', { rows: upserts.length })
         } else {
+          const quoteSymbols = quotes.map((row) => Reflect.get(row, 'symbol'))
+          const quotesWithLast = quotes.filter((row) => numOrNull(Reflect.get(row, 'last')) != null).length
+
+          const holdingYahooKeys = holdings.map((h) => resolveQuoteIdentity(h).yahooSymbol)
+
+          const unmatchedQuotes = quotesSymbolsUnmatchedToHoldings(quotes, holdings)
+
           console.warn('[live-prices] quotes_fetch_no_upserts', {
             quoteRows: quotes.length,
-            reason: 'no matching holdings or null last prices from API',
+            quotesWithNumericLast: quotesWithLast,
+            quoteSymbols,
+            holdingYahooKeys,
+            unmatchedQuoteSymbols: unmatchedQuotes,
+            reason: 'no upsert rows — check symbol match vs resolveQuoteIdentity or null last from API',
           })
         }
       }

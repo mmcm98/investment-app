@@ -8,7 +8,13 @@ import { useSharesightIntegration } from '../context/SharesightIntegrationContex
 
 import { useInvTheme } from '../context/InvThemeContext.jsx'
 
+import { useDashboardData } from '../hooks/useDashboardData.js'
+
 import { useWeeklyDca } from '../hooks/useWeeklyDca.js'
+
+import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
+
+import { SleevePortfolioDashboard } from '../components/portfolio/SleevePortfolioDashboard.jsx'
 
 import { actualCoreSleevePct } from '../lib/core/coreActualAllocation.js'
 
@@ -56,9 +62,19 @@ export function CorePortfolio() {
 
   const theme = useInvTheme()
 
+  const dash = useDashboardData()
+
   const dca = useWeeklyDca()
 
   const { mergedRows, pricesUpdating } = useLivePrices()
+
+  const benchSymbol = useMemo(() => {
+    const p = mergeUserPreferences(dash.settingsRow?.preferences)
+
+    const s = p.benchmarks?.default_symbol
+
+    return typeof s === 'string' && s.trim() ? s.trim() : 'VGS.AX'
+  }, [dash.settingsRow?.preferences])
 
   const rowsWithActual = useMemo(
     () =>
@@ -116,6 +132,13 @@ export function CorePortfolio() {
           {pricesUpdating ? <span className="text-[#79CBFF]">Updating prices…</span> : <span>Quotes idle</span>}
         </div>
       </header>
+
+      <SleevePortfolioDashboard
+        portfolioRole="core"
+        perfSeries={dash.perfCoreSeries}
+        benchSymbol={benchSymbol}
+        dashboardHydrated={dash.dashboardHydrated}
+      />
 
       {dca.loadError ? (
         <DataStaleBanner

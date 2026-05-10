@@ -8,6 +8,8 @@ import { mapFmpExchangeToSession } from './exchangeSessions.js'
 export function deriveYahooSymbolFromFmp(args) {
   const raw = `${args.fmpSymbol ?? ''}`.trim()
 
+  if (!raw) return ''
+
   const upperSymbol = raw.toUpperCase()
 
   const sessionKey = mapFmpExchangeToSession(args.exchangeShortName)
@@ -61,4 +63,24 @@ function stripSuffix(symbol, suffix) {
 /** @param {string} ticker */
 export function normalizeYahooTicker(ticker) {
   return ticker.trim().toUpperCase().replace(/\s+/g, '')
+}
+
+/**
+ * Yahoo / upstream quote rows sometimes use `-` vs `.` for class tickers (e.g. BRK-B vs BRK.B).
+ *
+ * @param {string | null | undefined} a
+ * @param {string | null | undefined} b
+ */
+export function yahooSymbolsLooselyEqual(a, b) {
+  const x = normalizeYahooTicker(`${a ?? ''}`)
+  const y = normalizeYahooTicker(`${b ?? ''}`)
+
+  if (!x || !y) return false
+
+  if (x === y) return true
+
+  const xn = x.replace(/-/g, '.')
+  const yn = y.replace(/-/g, '.')
+
+  return xn === yn
 }

@@ -1,7 +1,12 @@
-﻿import { Link } from 'react-router-dom'
+﻿import { useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { AddTickerCombobox } from '../components/satellite/AddTickerCombobox.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
+import { useDashboardData } from '../hooks/useDashboardData.js'
 import { useInvTheme } from '../context/InvThemeContext.jsx'
+import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
+import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
+import { SleevePortfolioDashboard } from '../components/portfolio/SleevePortfolioDashboard.jsx'
 import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
 import { MotionCard } from '../components/ui/MotionCard.jsx'
 import { Skeleton } from '../components/ui/Skeleton.jsx'
@@ -26,9 +31,21 @@ function fmtAudParen(n) {
 }
 
 export function SatellitePortfolio() {
+  const { userPresent } = useSharesightIntegration()
+
   const sp = useSatellitePortfolio()
 
+  const dash = useDashboardData()
+
   const theme = useInvTheme()
+
+  const benchSymbol = useMemo(() => {
+    const p = mergeUserPreferences(dash.settingsRow?.preferences)
+
+    const s = p.benchmarks?.default_symbol
+
+    return typeof s === 'string' && s.trim() ? s.trim() : 'VGS.AX'
+  }, [dash.settingsRow?.preferences])
 
   async function onToggleAud(e) {
     await sp.setPrefShowAud(e.target.checked)
@@ -49,6 +66,15 @@ export function SatellitePortfolio() {
           Show AUD parenthetical
         </label>
       </header>
+
+      {userPresent ? (
+        <SleevePortfolioDashboard
+          portfolioRole="satellite"
+          perfSeries={dash.perfSatSeries}
+          benchSymbol={benchSymbol}
+          dashboardHydrated={dash.dashboardHydrated}
+        />
+      ) : null}
 
       {!sp.satelliteHydrated ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
