@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { useSharesightIntegration } from './SharesightIntegrationContext.jsx'
 import { audPerForeignUnit, deriveYahooFxSymbol, uniqueFxPairsForCurrencies } from '../lib/market/fxPairs.js'
-import { anyExchangeNeedsLiveQuotes, isLivePriceWindowActiveForExchange } from '../lib/market/exchangeSessions.js'
+import { isLivePriceWindowActiveForExchange } from '../lib/market/exchangeSessions.js'
 import { resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
@@ -325,6 +325,8 @@ export function LivePricesProvider({ children }) {
     try {
       const holdings = holdingRows
 
+      console.info('[live-prices] market_cycle_start', { holdingCount: holdings.length })
+
       const currencies = [...new Set(holdings.map((h) => currencyIso(h.currency)))]
 
       const fromHoldings = uniqueFxPairsForCurrencies(currencies)
@@ -337,6 +339,12 @@ export function LivePricesProvider({ children }) {
       const fxResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'fx', symbols: fxSymbols }))
 
       const fxPriceMap = /** @type {Record<string, { price: number | null }>} */ (Reflect.get(fxResp, 'fx') ?? {})
+
+      console.info('[live-prices] fx_fetch_response', {
+        ok: Reflect.get(fxResp, 'ok'),
+        symbolsRequested: fxSymbols.length,
+        fxKeys: Object.keys(fxPriceMap).length,
+      })
 
       for (const sym of fxSymbols) {
         const px = fxPriceMap[sym]?.price
@@ -363,29 +371,50 @@ export function LivePricesProvider({ children }) {
 
       setFxByCurrency(fxLive)
 
-      const exchanges = holdings.map((h) => resolveQuoteIdentity(h).exchangeShortName)
+      /**
+       * During regular session we poll Yahoo for that venue. Outside session we still fetch when we have no
+       * cached `last_price` (weekends / first deploy) so the UI is not stuck at $0 while the batch API works.
+       */
+      const items =
+        holdings.length > 0
+          ? holdings
+              .filter((h) => {
+                const id = resolveQuoteIdentity(h)
+                const inSession = isLivePriceWindowActiveForExchange(id.exchangeShortName)
+                const snap = snapshotRef.current.get(holdingKey(h))
+                const lastCached = snap ? numOrNull(Reflect.get(snap, 'last_price')) : null
+                const missingQuote = lastCached == null
 
-      const liveQuotes = holdings.length > 0 && anyExchangeNeedsLiveQuotes(exchanges, new Date())
+                return inSession || missingQuote
+              })
+              .map((h) => {
+                const id = resolveQuoteIdentity(h)
 
-      if (liveQuotes) {
-        const items = holdings
-          .filter((h) => isLivePriceWindowActiveForExchange(resolveQuoteIdentity(h).exchangeShortName))
-          .map((h) => {
-            const id = resolveQuoteIdentity(h)
+                return { yahooSymbol: id.yahooSymbol, fmpSymbol: id.fmpSymbol, exchangeShort: id.exchangeShortName }
+              })
+          : []
 
-            return { yahooSymbol: id.yahooSymbol, fmpSymbol: id.fmpSymbol, exchangeShort: id.exchangeShortName }
-          })
+      if (items.length > 0) {
+        console.info('[live-prices] quotes_fetch_attempt', {
+          holdings: holdings.length,
+          quoteItems: items.length,
+          hasMarketSecret: Boolean(`${import.meta.env.VITE_MARKET_API_SECRET ?? ''}`.trim()),
+        })
 
-        if (items.length > 0) {
-          const qResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'quotes', items }))
+        const qResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'quotes', items }))
 
-          const quotes = /** @type {Record<string, unknown>[]} */ (Reflect.get(qResp, 'quotes') ?? [])
+        const quotes = /** @type {Record<string, unknown>[]} */ (Reflect.get(qResp, 'quotes') ?? [])
 
-          const nowIso = new Date().toISOString()
+        console.info('[live-prices] quotes_fetch_response', {
+          ok: Reflect.get(qResp, 'ok'),
+          quoteRows: Array.isArray(quotes) ? quotes.length : 0,
+        })
 
-          const upserts = []
+        const nowIso = new Date().toISOString()
 
-          for (const q of quotes) {
+        const upserts = []
+
+        for (const q of quotes) {
             const sym = `${Reflect.get(q, 'symbol') ?? ''}`.trim().toUpperCase()
 
             const holding = holdings.find((hh) => resolveQuoteIdentity(hh).yahooSymbol === sym)
@@ -438,15 +467,21 @@ export function LivePricesProvider({ children }) {
               ath_computed_at: Reflect.get(snap ?? {}, 'ath_computed_at'),
               updated_at: nowIso,
             })
-          }
+        }
 
-          if (upserts.length > 0) {
-            const { error } = await supabase.from('market_quote_snapshots').upsert(upserts, {
-              onConflict: 'user_id,portfolio_role,holding_external_id',
-            })
+        if (upserts.length > 0) {
+          const { error } = await supabase.from('market_quote_snapshots').upsert(upserts, {
+            onConflict: 'user_id,portfolio_role,holding_external_id',
+          })
 
-            if (error) throw error
-          }
+          if (error) throw error
+
+          console.info('[live-prices] market_quote_snapshots_upsert', { rows: upserts.length })
+        } else {
+          console.warn('[live-prices] quotes_fetch_no_upserts', {
+            quoteRows: quotes.length,
+            reason: 'no matching holdings or null last prices from API',
+          })
         }
       }
 
@@ -526,16 +561,30 @@ export function LivePricesProvider({ children }) {
 
       await hydrateFromSupabase()
     } catch (e) {
-      setQuoteError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+
+      console.warn('[live-prices] market_cycle_error', { message: msg })
+
+      setQuoteError(msg)
     } finally {
       setPricesUpdating(false)
     }
   }, [supabase, userPresent, holdingRows, hydrateFromSupabase, persistFxRows])
 
   useEffect(() => {
-    if (!supabase || !userPresent || holdingRows.length === 0) return undefined
+    if (!supabase || !userPresent || holdingRows.length === 0) {
+      if (supabase && userPresent && holdingRows.length === 0) {
+        console.info('[live-prices] refresh_timer_skip', { reason: 'holdings_not_loaded_yet' })
+      }
+
+      return undefined
+    }
+
+    console.info('[live-prices] refresh_timer_armed', { intervalMs: REFRESH_MS, holdingCount: holdingRows.length })
 
     const id = window.setInterval(() => {
+      console.info('[live-prices] refresh_timer_tick')
+
       void runMarketCycle()
     }, REFRESH_MS)
 

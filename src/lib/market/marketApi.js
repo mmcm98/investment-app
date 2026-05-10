@@ -21,6 +21,13 @@ export async function postMarketBatch(payload) {
   if (!res.ok) {
     const text = await res.text().catch(() => '')
 
+    console.warn('[market-api] batch_http_error', {
+      status: res.status,
+      op: typeof payload.op === 'string' ? payload.op : undefined,
+      bodyPreview: text.slice(0, 240),
+      sentMarketSecret: Boolean(secret),
+    })
+
     throw new Error(`market batch HTTP ${res.status}: ${text.slice(0, 300)}`)
   }
 
