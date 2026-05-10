@@ -1,6 +1,6 @@
 import { DEFAULT_GHHF_TIERS, DEFAULT_STANDARD_TIERS } from './defaultTierSchedules.js'
 import { distanceFromAthPercent, matchTier, parseTierBands } from './tierMultiplier.js'
-import { tickersLooselyEqual } from './tickerMatch.js'
+import { coreEtfTickerMatchesQuoteRow } from './tickerMatch.js'
 
 const DEFAULT_BASE_WEEKLY_AUD = 350
 const DEFAULT_GEARING = 1.5
@@ -27,8 +27,10 @@ const DEFAULT_GEARING = 1.5
  *   portfolio_role: string
  *   instrument_symbol: string | null
  *   yahoo_symbol: string
+ *   fmp_symbol?: string | null
  *   display_aud: number | null
  *   ath: number | null
+ *   is_cash_like?: boolean
  * }} QuoteLikeRow
  */
 
@@ -68,19 +70,35 @@ export function resolveSchedulesFromSettings(raw) {
  * @param {string} ticker
  */
 export function findCoreQuoteForTicker(mergedRows, ticker) {
-  const core = mergedRows.filter((r) => `${r.portfolio_role}`.toLowerCase() === 'core')
+  const core = mergedRows.filter((r) => `${r?.portfolio_role ?? ''}`.trim().toLowerCase() === 'core')
 
   /** @type {QuoteLikeRow | null} */
   let best = null
 
   for (const r of core) {
-    if (tickersLooselyEqual(r.instrument_symbol, ticker) || tickersLooselyEqual(r.yahoo_symbol, ticker)) {
+    if (!coreEtfTickerMatchesQuoteRow(r, ticker)) continue
+
+    if (!best) {
+      best = r
+      continue
+    }
+    const score = (row) => (row.display_aud != null ? 2 : 0) + (row.ath != null ? 1 : 0)
+
+    if (score(r) > score(best)) best = r
+  }
+
+  /** Core sleeve tag wrong in DB — still tie DCA display to core ETF holdings by ticker. */
+  if (!best) {
+    const scored = mergedRows.filter((r) => coreEtfTickerMatchesQuoteRow(r, ticker) && !r?.is_cash_like)
+
+    for (const r of scored) {
       if (!best) {
-        best = r
+        best = /** @type {QuoteLikeRow} */ (/** @type {unknown} */ (r))
         continue
       }
       const score = (row) => (row.display_aud != null ? 2 : 0) + (row.ath != null ? 1 : 0)
-      if (score(r) > score(best)) best = r
+
+      if (score(/** @type {QuoteLikeRow} */ (r)) > score(best)) best = /** @type {QuoteLikeRow} */ (/** @type {unknown} */ (r))
     }
   }
 

@@ -155,6 +155,22 @@ function inferExchangeFromInstrumentDecisiveFields(o) {
 
   if (mc === 'ASX' || mc === 'XASX' || mc === 'AU' || mc === 'CXA' || mc === 'CHIX' || mc === 'SSX') return 'AU'
 
+  const mkt = Reflect.get(o, 'market')
+
+  if (mkt && typeof mkt === 'object') {
+    const mo = /** @type {Record<string, unknown>} */ (mkt)
+    const mc2 = normalizeSharesightMarketCode(
+      Reflect.get(mo, 'market_code') ??
+        Reflect.get(mo, 'code') ??
+        Reflect.get(mo, 'identifier') ??
+        Reflect.get(mo, 'mic'),
+    )
+
+    if (mc2 === 'LSE' || mc2 === 'XLON' || mc2 === 'LON' || mc2 === 'AIM' || mc2 === 'LSIN') return 'LSE'
+
+    if (mc2 === 'ASX' || mc2 === 'XASX' || mc2 === 'AU' || mc2 === 'CXA' || mc2 === 'CHIX' || mc2 === 'SSX') return 'AU'
+  }
+
   const tzRaw = Reflect.get(o, 'tz_name')
 
   if (typeof tzRaw === 'string' && tzRaw.trim()) {
@@ -173,6 +189,14 @@ export function inferExchangeShortNameFromSharesightRaw(raw, instrumentSymbol) {
 
   /** @type {string[]} */
   const hints = []
+
+  if (raw && typeof raw === 'object') {
+    const decisiveHolding = inferExchangeFromInstrumentDecisiveFields(
+      /** @type {Record<string, unknown>} */ (raw),
+    )
+
+    if (decisiveHolding) return decisiveHolding
+  }
 
   if (inst && typeof inst === 'object') {
     const o = /** @type {Record<string, unknown>} */ (inst)
@@ -204,7 +228,7 @@ export function inferExchangeShortNameFromSharesightRaw(raw, instrumentSymbol) {
   if (raw && typeof raw === 'object') {
     const r = /** @type {Record<string, unknown>} */ (raw)
 
-    for (const k of ['exchange', 'primary_exchange', 'listing_exchange', 'market']) {
+    for (const k of ['market_code', 'tz_name', 'exchange', 'primary_exchange', 'listing_exchange', 'market']) {
       const val = Reflect.get(r, k)
 
       if (typeof val === 'string' && val.trim()) hints.push(val)
@@ -268,6 +292,23 @@ export function inferFmpSymbol(instrumentSymbol, exchangeShort) {
 }
 
 /**
+ * @param {string} yahoo
+ */
+function inferredVenueBucketFromYahooSymbol(yahoo) {
+  const u = `${yahoo ?? ''}`.trim().toUpperCase()
+
+  if (!u) return null
+
+  if (/\.AX$/i.test(u) || /\.AU$/i.test(u)) return 'AU'
+
+  if (/\.L$/i.test(u)) return 'LSE'
+
+  if (/\.TO$/i.test(u)) return 'TSX'
+
+  return null
+}
+
+/**
  * @param {{
  *   instrument_symbol: string | null
  *   raw: Record<string, unknown>
@@ -275,24 +316,31 @@ export function inferFmpSymbol(instrumentSymbol, exchangeShort) {
  */
 export function resolveQuoteIdentity(row) {
   const inst = pickInstrument(row.raw)
+  const instrumentCode = resolveInstrumentCodeForQuote(row)
+  const exchangeShort = inferExchangeShortNameFromSharesightRaw(row.raw, instrumentCode)
+
   const directYahoo = tryDirectYahooFromInstrument(inst)
 
   /** Only trust pre-formed Yahoo tickers (contain venue suffix or path). */
   if (directYahoo && /[./]/.test(directYahoo)) {
-    const instrumentCode = resolveInstrumentCodeForQuote(row)
-    const exchangeShort = inferExchangeShortNameFromSharesightRaw(row.raw, instrumentCode)
-    const fmpSymbol = inferFmpSymbol(instrumentCode, exchangeShort)
+    const yVenue = inferredVenueBucketFromYahooSymbol(directYahoo)
+    const conflictsWithInf =
+      (yVenue === 'AU' && exchangeShort === 'LSE') ||
+      (yVenue === 'LSE' && exchangeShort === 'AU') ||
+      (yVenue === 'AU' && exchangeShort === 'TSX') ||
+      (yVenue === 'TSX' && exchangeShort === 'AU')
 
-    return {
-      fmpSymbol: fmpSymbol || instrumentCode,
-      exchangeShortName: exchangeShort,
-      yahooSymbol: directYahoo,
+    if (!conflictsWithInf) {
+      const fmpSymbol = inferFmpSymbol(instrumentCode, exchangeShort)
+
+      return {
+        fmpSymbol: fmpSymbol || instrumentCode,
+        exchangeShortName: exchangeShort,
+        yahooSymbol: directYahoo,
+      }
     }
   }
 
-  const instrumentCode = resolveInstrumentCodeForQuote(row)
-
-  const exchangeShort = inferExchangeShortNameFromSharesightRaw(row.raw, instrumentCode)
   const fmpSymbol = inferFmpSymbol(instrumentCode, exchangeShort)
 
   /** Prefer canonical FMP-shaped base (e.g. DPLM.L) over bare code so venue suffix is not lost. */

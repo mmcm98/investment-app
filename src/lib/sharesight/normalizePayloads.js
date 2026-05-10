@@ -339,7 +339,72 @@ export function parseValuationHoldingsList(valuation) {
  * @param {unknown} valuation
  * @returns {Map<string, Record<string, unknown>>}
  */
+/**
+ * @param {unknown} item
+ */
+function indexValuationHoldingAliases(item, /** @type {Map<string, Record<string, unknown>>} */ map) {
+  if (!item || typeof item !== 'object') return
+
+  const o = /** @type {Record<string, unknown>} */ (item)
+
+  const idCandidates = [
+    Reflect.get(o, 'id'),
+    Reflect.get(o, 'holding_id'),
+    Reflect.get(o, 'portfolio_holding_id'),
+    Reflect.get(o, 'sharesight_holding_id'),
+  ]
+
+  const nestedH = Reflect.get(o, 'holding')
+
+  if (nestedH && typeof nestedH === 'object') {
+    const nh = /** @type {Record<string, unknown>} */ (nestedH)
+
+    idCandidates.push(Reflect.get(nh, 'id'), Reflect.get(nh, 'holding_id'))
+  }
+
+  for (const rawId of idCandidates) {
+    const hid = coerceString(rawId)
+
+    if (hid) map.set(hid, o)
+  }
+
+  const inst = Reflect.get(o, 'instrument')
+
+  if (inst && typeof inst === 'object') {
+    const io = /** @type {Record<string, unknown>} */ (inst)
+
+    const iid = coerceString(
+      Reflect.get(io, 'id') ?? Reflect.get(io, 'instrument_id') ?? Reflect.get(io, 'security_id'),
+    )
+
+    if (iid) map.set(iid, o)
+
+    const pcode = coerceString(
+      Reflect.get(io, 'portfolio_investment_id') ?? Reflect.get(io, 'portfolio_instrument_id'),
+    )
+
+    if (pcode) map.set(pcode, o)
+  }
+}
+
 export function indexValuationHoldingsByExternalId(valuation) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const map = new Map()
+
+  for (const item of parseValuationHoldingsList(valuation)) {
+    indexValuationHoldingAliases(item, map)
+  }
+
+  return map
+}
+
+/**
+ * Last row wins when duplicate codes exist in the valuation payload.
+ *
+ * @param {unknown} valuation
+ * @returns {Map<string, Record<string, unknown>>}
+ */
+export function indexValuationHoldingsByInstrumentCode(valuation) {
   /** @type {Map<string, Record<string, unknown>>} */
   const map = new Map()
 
@@ -347,17 +412,32 @@ export function indexValuationHoldingsByExternalId(valuation) {
     if (!item || typeof item !== 'object') continue
 
     const o = /** @type {Record<string, unknown>} */ (item)
-    const hid = coerceString(Reflect.get(o, 'id') ?? Reflect.get(o, 'holding_id'))
-
-    if (hid) map.set(hid, o)
-
     const inst = Reflect.get(o, 'instrument')
+    const instObj = inst && typeof inst === 'object' ? /** @type {Record<string, unknown>} */ (inst) : null
 
-    if (inst && typeof inst === 'object') {
-      const iid = coerceString(Reflect.get(/** @type {Record<string, unknown>} */ (inst), 'id'))
+    let rawCode = ''
 
-      if (iid) map.set(iid, o)
+    if (instObj) {
+      rawCode = coerceString(
+        Reflect.get(instObj, 'code') ??
+          Reflect.get(instObj, 'symbol') ??
+          Reflect.get(instObj, 'ticker'),
+      )
     }
+
+    if (!rawCode) {
+      rawCode = coerceString(
+        Reflect.get(o, 'symbol') ?? Reflect.get(o, 'code') ?? Reflect.get(o, 'instrument_symbol'),
+      )
+    }
+
+    const code = rawCode
+      .trim()
+      .toUpperCase()
+      .replace(/^ASX:/i, '')
+      .replace(/\.(AX|AU|L)$/i, '')
+
+    if (code) map.set(code, o)
   }
 
   return map

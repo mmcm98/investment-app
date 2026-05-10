@@ -83,7 +83,7 @@ export function useWeeklyDca() {
     const tierSchedulesJson = settingsRow ? settingsRow.tier_schedules : null
 
     const coreEtfs = coreRows.map((r) => ({
-      ticker: `${r.ticker ?? ''}`,
+      ticker: `${r.ticker ?? ''}`.trim(),
       name: typeof r.name === 'string' ? r.name : null,
       provider_page_url: typeof r.provider_page_url === 'string' ? r.provider_page_url : null,
       target_weight_pct: numOr(r.target_weight_pct, 0),

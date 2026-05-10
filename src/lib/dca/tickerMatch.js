@@ -19,3 +19,21 @@ export function tickersLooselyEqual(a, b) {
   if (!na || !nb) return false
   return na === nb
 }
+
+/**
+ * `core_etfs.ticker` is often bare (`GHHF`) while snapshots use Yahoo/FMP forms (`GHHF.AX`, `GHHF.L`).
+ *
+ * @param {{ instrument_symbol?: string | null, yahoo_symbol?: string | null, fmp_symbol?: string | null }} row
+ * @param {string | null | undefined} etfTicker
+ */
+export function coreEtfTickerMatchesQuoteRow(row, etfTicker) {
+  const t = `${etfTicker ?? ''}`.trim()
+
+  if (!t) return false
+
+  return (
+    tickersLooselyEqual(row?.instrument_symbol, t) ||
+    tickersLooselyEqual(row?.yahoo_symbol, t) ||
+    tickersLooselyEqual(row?.fmp_symbol, t)
+  )
+}

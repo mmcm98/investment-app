@@ -15,6 +15,7 @@ import {
   extractCashBalancesFromValuationPayload,
   parseValuationHoldingsList,
   indexValuationHoldingsByExternalId,
+  indexValuationHoldingsByInstrumentCode,
   applyValuationHoldingToSharesightRow,
   indexPerformanceHoldingsByExternalId,
   applyPerformanceHoldingFillGaps,
@@ -183,6 +184,62 @@ function logValuationResponseSample(valuation, ctx) {
     valuationHoldingsCount: list.length,
     firstHoldingKeys: first,
     json,
+  })
+}
+
+/**
+ * Per-valuation-row id fields (diagnose v3 holdings id vs valuation holding id mismatches).
+ *
+ * @param {unknown} valuation
+ * @param {{ portfolio_role?: string, portfolio_external_id?: string }} ctx
+ */
+function logValuationHoldingsIdLedger(valuation, ctx) {
+  const list = parseValuationHoldingsList(valuation)
+
+  const rows = list.slice(0, 150).map((item, idx) => {
+    if (!item || typeof item !== 'object') return { idx, error: 'non_object' }
+
+    const o = /** @type {Record<string, unknown>} */ (item)
+    const inst =
+      Reflect.get(o, 'instrument') && typeof Reflect.get(o, 'instrument') === 'object'
+        ? /** @type {Record<string, unknown>} */ (Reflect.get(o, 'instrument'))
+        : null
+
+    /** @type {Record<string, unknown>|null} */
+    const nestH =
+      Reflect.get(o, 'holding') && typeof Reflect.get(o, 'holding') === 'object'
+        ? /** @type {Record<string, unknown>} */ (Reflect.get(o, 'holding'))
+        : null
+
+    return {
+      idx,
+      ids: {
+        id: Reflect.get(o, 'id'),
+        id_type: typeof Reflect.get(o, 'id'),
+        holding_id: Reflect.get(o, 'holding_id'),
+        portfolio_holding_id: Reflect.get(o, 'portfolio_holding_id'),
+        nested_holding_id: nestH ? Reflect.get(nestH, 'id') : undefined,
+      },
+      instrument_ids: inst
+        ? {
+            instrument_id: Reflect.get(inst, 'id'),
+            instrument_id_type: typeof Reflect.get(inst, 'id'),
+            code: Reflect.get(inst, 'code'),
+            symbol: Reflect.get(inst, 'symbol'),
+          }
+        : null,
+      valuation_symbol_top: Reflect.get(o, 'symbol'),
+      quantity: Reflect.get(o, 'quantity'),
+      market_value: Reflect.get(o, 'market_value'),
+      value_preview: Reflect.get(o, 'value'),
+    }
+  })
+
+  console.info('[sharesight-sync] valuation_holdings_id_ledger', {
+    ...ctx,
+    totalValuationHoldingsParsed: list.length,
+    ledgerRowsSampled: rows.length,
+    rows,
   })
 }
 
@@ -420,7 +477,15 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       portfolio_external_id: portfolioId,
     })
 
+    if (`${portfolioRole}`.trim().toLowerCase() === 'satellite') {
+      logValuationHoldingsIdLedger(valuationPayload, {
+        portfolio_role: portfolioRole,
+        portfolio_external_id: portfolioId,
+      })
+    }
+
     const valuationById = indexValuationHoldingsByExternalId(valuationPayload)
+    const valuationByInstrumentCode = indexValuationHoldingsByInstrumentCode(valuationPayload)
     const performanceById = indexPerformanceHoldingsByExternalId(performancePayload)
 
     console.info('[sharesight-sync] performance_holding_index', {
@@ -439,7 +504,22 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
       let out = r
 
-      const vh = hid ? valuationById.get(hid) : undefined
+      let vh = hid ? valuationById.get(hid) : undefined
+
+      if (!vh && hid) {
+        const n = Number.parseFloat(hid)
+
+        if (Number.isFinite(n))
+          vh = valuationById.get(String(Math.trunc(n))) ?? valuationById.get(String(n))
+      }
+
+      const codeKey = `${r.instrument_symbol ?? ''}`
+        .trim()
+        .toUpperCase()
+        .replace(/^ASX:/i, '')
+        .replace(/\.(AX|AU|L)$/i, '')
+
+      if (!vh && codeKey) vh = valuationByInstrumentCode.get(codeKey)
 
       if (vh) out = applyValuationHoldingToSharesightRow(out, vh)
 
