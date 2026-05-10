@@ -11,7 +11,7 @@ import {
 import { useSharesightIntegration } from './SharesightIntegrationContext.jsx'
 import { audPerForeignUnit, deriveYahooFxSymbol, uniqueFxPairsForCurrencies } from '../lib/market/fxPairs.js'
 import { isLivePriceWindowActiveForExchange } from '../lib/market/exchangeSessions.js'
-import { resolveInstrumentCodeForQuote, resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
+import { describeHoldingQuoteDiagnostics, resolveQuoteIdentity } from '../lib/market/sharesightHoldingFx.js'
 import { yahooSymbolsLooselyEqual } from '../lib/market/tickerMap.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
@@ -441,21 +441,16 @@ export function LivePricesProvider({ children }) {
           : []
 
       if (items.length > 0) {
-        const holdingDebug = holdings.map((h) => ({
-          holding_external_id: h.holding_external_id,
-          portfolio_role: h.portfolio_role,
-          instrument_symbol: h.instrument_symbol,
-          resolved_code: resolveInstrumentCodeForQuote(h),
-          yahoo_symbol: resolveQuoteIdentity(h).yahooSymbol,
-        }))
+        const diagnostics = holdings.map((h) => describeHoldingQuoteDiagnostics(/** @type {Record<string, unknown>} */ (h)))
 
         console.info('[live-prices] quotes_fetch_attempt', {
           holdings: holdings.length,
           quoteItems: items.length,
           hasMarketSecret: Boolean(`${import.meta.env.VITE_MARKET_API_SECRET ?? ''}`.trim()),
           fetchYahooSymbols: items.map((it) => it.yahooSymbol),
-          holdingDebug,
         })
+
+        console.info('[live-prices] holding_quote_resolution', diagnostics)
 
         const qResp = /** @type {Record<string, unknown>} */ (await postMarketBatch({ op: 'quotes', items }))
 
