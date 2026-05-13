@@ -1,6 +1,6 @@
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 
 import { useLivePrices } from '../context/LivePricesContext.jsx'
 
@@ -24,11 +24,25 @@ function rz(p, k) {
 export function PositionDetail() {
   const { id } = useParams()
 
+  const [searchParams] = useSearchParams()
+
   const det = usePositionDetail(id)
 
   const lp = useLivePrices()
 
+  const tabFromUrl = `${searchParams.get('tab') ?? ''}`.trim().toLowerCase()
+
   const [tab, setTab] = useState(/** @type {'overview'|'live'|'scorecard'|'research'|'monitor'} */ ('overview'))
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      if (tabFromUrl === 'live' || tabFromUrl === 'scorecard' || tabFromUrl === 'research' || tabFromUrl === 'monitor') {
+        setTab(/** @type {typeof tab} */ (tabFromUrl))
+      } else {
+        setTab('overview')
+      }
+    })
+  }, [id, tabFromUrl])
 
   const yahoo = det.position ? `${rz(det.position, 'yahoo_symbol') ?? ''}`.trim() : ''
 

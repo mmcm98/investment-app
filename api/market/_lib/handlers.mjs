@@ -644,7 +644,120 @@ export async function equityFactsOp(body, env) {
   }
 }
 
-/** @param {Record<string, unknown>} body */
+/**
+ * FMP v3 `historical-price-full/{symbol}` — closing prices in listing currency.
+ *
+ * @param {{ symbol?: unknown, exchangeShort?: unknown, period?: unknown }} body
+ * @param {typeof process.env | Record<string,string|undefined>} env
+ */
+export async function fmpHistoricalFullOp(body, env) {
+  const key = resolveFmpApiKey(env)
+
+  const fmp = `${body.symbol ?? ''}`.trim().toUpperCase().replace(/^=/, '')
+
+  const ex = `${body.exchangeShort ?? ''}`.trim()
+
+  const period = `${typeof body.period === 'string' ? body.period : ''}`.trim().toUpperCase() || '1Y'
+
+  if (!fmp || !key) return { ok: false, error: 'symbol_or_key_missing', points: [], fmpInstrument: '' }
+
+  const fullSym = buildFmpHistoricalSymbol(fmp, ex)
+
+  const to = new Date()
+
+  const from = new Date()
+
+  const months = /** @type {Record<string, number>} */ ({
+    '3M': 3,
+    '6M': 6,
+    '1Y': 12,
+    '2Y': 24,
+  })
+
+  from.setMonth(from.getMonth() - (months[period] ?? 12))
+
+  const fromIso = from.toISOString().slice(0, 10)
+
+  const toIso = to.toISOString().slice(0, 10)
+
+  const url = `${FMP_BASE}/historical-price-full/${encodeURIComponent(fullSym)}?from=${fromIso}&to=${toIso}&apikey=${encodeURIComponent(key)}`
+
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } })
+
+    /** @type {unknown} */
+    let json
+
+    try {
+      json = await res.json()
+    } catch {
+      return { ok: false, error: 'json_parse_failed', points: [], fmpInstrument: fullSym }
+    }
+
+    if (!res.ok) {
+      const msg = fmpErrorMessageFromBody(json) ?? `http_${res.status}`
+
+      return { ok: false, error: msg, points: [], fmpInstrument: fullSym }
+    }
+
+    const bodyErr = fmpErrorMessageFromBody(json)
+
+    if (bodyErr) return { ok: false, error: bodyErr, points: [], fmpInstrument: fullSym }
+
+    /** @type {unknown[]} */
+    let hist = []
+
+    if (json && typeof json === 'object') {
+      const o = /** @type {Record<string, unknown>} */ (json)
+
+      const h = Reflect.get(o, 'historical')
+
+      if (Array.isArray(h)) hist = h
+    }
+
+    /** @type {{ t: string, close: number }[]} */
+    const points = []
+
+    for (const row of hist) {
+      if (!row || typeof row !== 'object') continue
+
+      const ro = /** @type {Record<string, unknown>} */ (row)
+
+      const d = `${Reflect.get(ro, 'date') ?? ''}`.trim()
+
+      const cRaw = Reflect.get(ro, 'close') ?? Reflect.get(ro, 'adjClose')
+
+      const c =
+        typeof cRaw === 'number' && Number.isFinite(cRaw) ? cRaw : Number.parseFloat(`${cRaw ?? ''}`)
+
+      if (!d || !Number.isFinite(c)) continue
+
+      points.push({ t: d, close: c })
+    }
+
+    points.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+
+    return { ok: true, fmpInstrument: fullSym, points }
+  } catch (e) {
+    return { ok: false, error: `${e}`, points: [], fmpInstrument: fullSym }
+  }
+}
+
+/**
+ * @param {string} fmp
+ * @param {string} exchangeShort
+ */
+function buildFmpHistoricalSymbol(fmp, exchangeShort) {
+  const e = `${exchangeShort ?? ''}`.trim().toUpperCase()
+
+  if (e === 'ASX' || e === 'AU' || e === 'AX') return `${fmp}.AX`
+
+  if (e === 'LSE' || e === 'LON' || e === 'L') return `${fmp}.L`
+
+  if (e === 'NYSE' || e === 'NASDAQ' || e === 'AMEX' || e === 'US' || e === 'USA') return fmp
+
+  return fmp
+}
 
 export async function dispatchMarketRpc(body, env) {
   const op = typeof body.op === 'string' ? body.op.trim() : ''
@@ -662,6 +775,8 @@ export async function dispatchMarketRpc(body, env) {
   if (op === 'chartHistory') return await chartHistoryOp(body)
 
   if (op === 'equityFacts') return await equityFactsOp(body, env)
+
+  if (op === 'fmpHistoricalFull') return await fmpHistoricalFullOp(body, env)
 
   return { ok: false, error: `unknown_op:${op}` }
 }

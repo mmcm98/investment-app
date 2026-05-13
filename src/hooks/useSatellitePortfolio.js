@@ -11,6 +11,8 @@ import {
 } from '../lib/satellite/satelliteMerge.js'
 import { universalTierFromScore } from '../lib/satellite/tierFromScore.js'
 import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
+import { resolveSharesightHoldingQuantity, resolveSharesightHoldingValueAud } from '../lib/sharesight/normalizePayloads.js'
+import { fmpInstrumentSymbol } from '../lib/market/fmpInstrumentSymbol.js'
 
 /** @param {unknown} prefs */
 export function satelliteShowAudParenthetical(prefs) {
@@ -84,6 +86,63 @@ function extraField(position, key) {
   return typeof v === 'string' ? v : null
 }
 
+/**
+ * @param {Record<string, unknown>|null} pos
+ * @param {Record<string, unknown>|null|undefined} h
+ */
+function exchangeGroupForRow(pos, h) {
+  const ho = /** @type {Record<string, unknown>|null} */ (h)
+
+  if (ho && isCashLikeHolding(ho)) return 'Cash Accounts'
+
+  const inst = ho ? `${Reflect.get(ho, 'instrument_symbol') ?? ''}`.trim() : ''
+
+  if (/^ASX:/i.test(inst)) return 'ASX'
+
+  const ex = pos ? `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim().toUpperCase() : ''
+
+  if (ex === 'ASX' || ex === 'AU' || ex === 'AX') return 'ASX'
+
+  if (ex === 'LSE' || ex === 'LON' || ex === 'L') return 'LSE'
+
+  if (ex) return ex
+
+  const yahoo = pos ? `${Reflect.get(pos, 'yahoo_symbol') ?? ''}`.trim() : ''
+
+  if (/\.AX$/i.test(yahoo)) return 'ASX'
+
+  if (/\.L$/i.test(yahoo)) return 'LSE'
+
+  return 'Other'
+}
+
+/**
+ * @param {Record<string, unknown>|null} pos
+ * @param {Record<string, unknown>|null|undefined} h
+ */
+function fmpDisplayAndExchange(pos, h) {
+  const ho = /** @type {Record<string, unknown>|null} */ (h)
+
+  if (pos) {
+    return {
+      fmp: `${Reflect.get(pos, 'fmp_symbol') ?? ''}`.trim(),
+      exchangeShort: `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim(),
+    }
+  }
+
+  const inst = ho ? `${Reflect.get(ho, 'instrument_symbol') ?? ''}`.trim() : ''
+
+  const m = inst.match(/^ASX:\s*(.+)$/i)
+
+  if (m) return { fmp: `${m[1] ?? ''}`.trim(), exchangeShort: 'ASX' }
+
+  const m2 = inst.match(/^LSE:\s*(.+)$/i)
+
+  if (m2) return { fmp: `${m2[1] ?? ''}`.trim(), exchangeShort: 'LSE' }
+
+  return { fmp: inst.replace(/^=/, ''), exchangeShort: '' }
+}
+
 export function useSatellitePortfolio() {
   const { supabase, userPresent, holdingsCount } = useSharesightIntegration()
   const { mergedRows } = useLivePrices()
@@ -103,11 +162,11 @@ export function useSatellitePortfolio() {
     setSatelliteFetching(true)
 
     try {
-    const { data: ud } = await supabase.auth.getUser()
-    const uid = ud.user?.id
-    if (!uid) return
+      const { data: ud } = await supabase.auth.getUser()
+      const uid = ud.user?.id
+      if (!uid) return
 
-    const [hRes, pRes, oRes, sRes] = await Promise.all([
+      const [hRes, pRes, oRes, sRes] = await Promise.all([
       supabase.from('sharesight_holdings').select('*').eq('user_id', uid).eq('portfolio_role', 'satellite').order('instrument_symbol', { ascending: true }),
       supabase
         .from('positions')
@@ -119,30 +178,30 @@ export function useSatellitePortfolio() {
         .order('display_ticker', { ascending: true }),
       supabase.from('allocation_overrides').select('*').eq('user_id', uid).eq('active', true),
       supabase.from('user_settings').select('*').eq('user_id', uid).maybeSingle(),
-    ])
+      ])
 
-    if (hRes.error) throw hRes.error
-    if (pRes.error) throw pRes.error
-    if (oRes.error) throw oRes.error
-    if (sRes.error) throw sRes.error
+      if (hRes.error) throw hRes.error
+      if (pRes.error) throw pRes.error
+      if (oRes.error) throw oRes.error
+      if (sRes.error) throw sRes.error
 
-    const pidList = (pRes.data ?? []).map((r) => `${Reflect.get(/** @type {Record<string, unknown>} */ (r), 'id')}`).filter(Boolean)
+      const pidList = (pRes.data ?? []).map((r) => `${Reflect.get(/** @type {Record<string, unknown>} */ (r), 'id')}`).filter(Boolean)
 
-    const scRes =
-      pidList.length > 0
-        ? await supabase
-            .from('scorecard_versions')
-            .select('id, position_id, version_number, framework, overall_score, payload, generated_at')
-            .in('position_id', pidList)
-        : ({ data: [], error: /** @type {null} */ (null) })
+      const scRes =
+        pidList.length > 0
+          ? await supabase
+              .from('scorecard_versions')
+              .select('id, position_id, version_number, framework, overall_score, payload, generated_at')
+              .in('position_id', pidList)
+          : ({ data: [], error: /** @type {null} */ (null) })
 
-    if (scRes.error) throw scRes.error
+      if (scRes.error) throw scRes.error
 
-    setHoldings(/** @type {Record<string, unknown>[]} */ (hRes.data ?? []))
-    setPositions(/** @type {Record<string, unknown>[]} */ (pRes.data ?? []))
-    setOverrides(/** @type {Record<string, unknown>[]} */ (oRes.data ?? []))
-    setSettingsRow(sRes.data ? /** @type {Record<string, unknown>} */ (sRes.data) : null)
-    setScoreRows(/** @type {Record<string, unknown>[]} */ (scRes.data ?? []))
+      setHoldings(/** @type {Record<string, unknown>[]} */ (hRes.data ?? []))
+      setPositions(/** @type {Record<string, unknown>[]} */ (pRes.data ?? []))
+      setOverrides(/** @type {Record<string, unknown>[]} */ (oRes.data ?? []))
+      setSettingsRow(sRes.data ? /** @type {Record<string, unknown>} */ (sRes.data) : null)
+      setScoreRows(/** @type {Record<string, unknown>[]} */ (scRes.data ?? []))
     } finally {
       setSatelliteFetching(false)
       setSatelliteHydrated(true)
@@ -247,23 +306,31 @@ export function useSatellitePortfolio() {
       if (typeof hk === 'string' && hk) posByHolding[hk] = /** @type {Record<string, unknown>} */ (p)
     }
 
-    const satHoldings = holdings.filter(
-      (h) => !isCashLikeHolding(/** @type {Record<string, unknown>} */ (h)) && !isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (h))
+    const nonCashHoldings = holdings.filter(
+      (h) => !isCashLikeHolding(/** @type {Record<string, unknown>} */ (h)),
     )
 
-    /** @type {{ rowKey: string, holding: Record<string, unknown>|null, position: Record<string, unknown>|null }[]} */
-    const rows = []
+    const cashHoldings = holdings.filter((h) => isCashLikeHolding(/** @type {Record<string, unknown>} */ (h)))
 
-    for (const h of satHoldings) {
+    /** @type {{ rowKey: string, holding: Record<string, unknown>|null, position: Record<string, unknown>|null }[]} */
+    const tableRows = []
+
+    for (const h of nonCashHoldings) {
       const ho = /** @type {Record<string, unknown>} */ (h)
       const hid = `${Reflect.get(ho, 'holding_external_id')}`
-      rows.push({ rowKey: `h:${hid}`, holding: ho, position: posByHolding[hid] ?? null })
+      tableRows.push({ rowKey: `h:${hid}`, holding: ho, position: posByHolding[hid] ?? null })
+    }
+
+    for (const h of cashHoldings) {
+      const ho = /** @type {Record<string, unknown>} */ (h)
+      const hid = `${Reflect.get(ho, 'holding_external_id')}`
+      tableRows.push({ rowKey: `h:${hid}`, holding: ho, position: posByHolding[hid] ?? null })
     }
 
     for (const p of positions) {
       const hk = Reflect.get(p, 'sharesight_holding_key')
       if (hk == null || hk === '') {
-        rows.push({ rowKey: `p:${Reflect.get(p, 'id')}`, holding: null, position: /** @type {Record<string, unknown>} */ (p) })
+        tableRows.push({ rowKey: `p:${Reflect.get(p, 'id')}`, holding: null, position: /** @type {Record<string, unknown>} */ (p) })
       }
     }
 
@@ -285,13 +352,13 @@ export function useSatellitePortfolio() {
 
     const { targetsByPositionId, sumOverrides, remainderValid } = computeSatelliteTargetAllocations(allocEntries, allocRuleOpts)
 
-    /** @typedef {typeof rows[number] & {
+    /** @typedef {typeof tableRows[number] & {
      * ticker: string, displayName: string, synopsis: string, assetClass: string|null, overallScore: number|null,
-     * tier: string|null, awaitingAnalysis: boolean, targetGuidancePct: number|null, actualWeightPct: number|null, driftPct: number|null,
+     * tier: string|null, awaitingAnalysis: boolean, hasScorecard: boolean, targetGuidancePct: number|null, actualWeightPct: number|null, driftPct: number|null,
      * mergedQuote: Record<string, unknown>|null, showAudPar: boolean, allocationOverridePct: number|null, allocationOverrideNote: string|null, positionId: string|null }} EnrichedCard */
 
     /** @type {EnrichedCard[]} */
-    const cards = rows.map((r) => {
+    const baseCards = tableRows.map((r) => {
       const pos = r.position
       const h = r.holding
 
@@ -335,11 +402,15 @@ export function useSatellitePortfolio() {
         null
 
       const mv = h ? numOrNull(Reflect.get(h, 'market_value')) : null
-      const actualWeightPct = totalMv > 0 && mv != null ? (mv / totalMv) * 100 : null
+      const ho = /** @type {Record<string, unknown>|null} */ (h)
+      const isClosedRow =
+        Boolean(ho && isSharesightHoldingClosed(ho)) || Boolean(pos && Reflect.get(pos, 'closed') === true)
+      const isCashRow = Boolean(ho && isCashLikeHolding(ho))
+      const actualWeightMvDen = !isClosedRow && !isCashRow && totalMv > 0 && mv != null ? (mv / totalMv) * 100 : null
 
       const targetGuidancePct = pid ? numOrNull(targetsByPositionId[pid]) : null
 
-      const driftPct = actualWeightPct != null && targetGuidancePct != null ? actualWeightPct - targetGuidancePct : null
+      const driftPct = actualWeightMvDen != null && targetGuidancePct != null ? actualWeightMvDen - targetGuidancePct : null
 
       const rebalanceSuggested =
         driftPct != null && Number.isFinite(driftPct) && Math.abs(driftPct) >= tierOpts.rebalanceTriggerPct
@@ -357,8 +428,9 @@ export function useSatellitePortfolio() {
         overallScore,
         tier,
         awaitingAnalysis,
+        hasScorecard,
         targetGuidancePct,
-        actualWeightPct,
+        actualWeightPct: actualWeightMvDen,
         driftPct,
         rebalanceSuggested,
         mergedQuote,
@@ -369,7 +441,68 @@ export function useSatellitePortfolio() {
       }
     })
 
-    return { cards, targetsByPositionId, sumOverrides, remainderValid, totalMv }
+    /** @type {(EnrichedCard & Record<string, unknown>)[]} */
+    const tableCards = baseCards.map((c) => {
+      const pos = c.position
+      const h = c.holding
+      const ho = /** @type {Record<string, unknown>|null} */ (h)
+
+      const rowClosed =
+        Boolean(ho && isSharesightHoldingClosed(ho)) || Boolean(pos && Reflect.get(pos, 'closed') === true)
+
+      const isCashLikeRow = Boolean(ho && isCashLikeHolding(ho))
+
+      const { fmp: fmpSymbol, exchangeShort } = fmpDisplayAndExchange(pos, h)
+
+      const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
+
+      const cost = ho ? numOrNull(Reflect.get(ho, 'cost_basis')) : null
+
+      const valueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
+
+      const uglHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
+
+      const ugl =
+        uglHo ??
+        (valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost) ? valueAud - cost : null)
+
+      const retPct = cost != null && cost !== 0 && ugl != null && Number.isFinite(ugl) ? (ugl / Math.abs(cost)) * 100 : null
+
+      const avgBuyNative = qty != null && qty !== 0 && cost != null && Number.isFinite(cost) ? cost / qty : null
+
+      const q = c.mergedQuote
+
+      const quoteCurrency =
+        (q && typeof Reflect.get(q, 'quote_currency') === 'string' && `${Reflect.get(q, 'quote_currency')}`.trim()) ||
+        (pos && `${Reflect.get(pos, 'currency') ?? ''}`.trim()) ||
+        (ho && `${Reflect.get(ho, 'currency') ?? ''}`.trim()) ||
+        ''
+
+      const fmpProfileSymbol = fmpInstrumentSymbol(fmpSymbol, exchangeShort)
+
+      const exchangeGroup = exchangeGroupForRow(pos, h)
+
+      return {
+        ...c,
+        rowClosed,
+        isCashLike: isCashLikeRow,
+        exchangeGroup,
+        fmpSymbol,
+        exchangeShort,
+        fmpProfileSymbol,
+        quantity: qty,
+        costBasis: cost,
+        valueAud,
+        capitalGainAud: ugl,
+        returnPct: retPct,
+        avgBuyNative,
+        quoteCurrency,
+      }
+    })
+
+    const cards = tableCards.filter((c) => !c.rowClosed && !c.isCashLike)
+
+    return { cards, tableCards, targetsByPositionId, sumOverrides, remainderValid, totalMv }
   }, [holdings, positions, latestScores, mergedRows, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
 
   const setPrefShowAud = useCallback(
@@ -448,6 +581,7 @@ export function useSatellitePortfolio() {
     showAudParenthetical: showAudPar,
     setPrefShowAud,
     cards: portfolio.cards,
+    tableCards: portfolio.tableCards,
     targetsByPositionId: portfolio.targetsByPositionId,
     sumOverrides: portfolio.sumOverrides,
     remainderValid: portfolio.remainderValid,
