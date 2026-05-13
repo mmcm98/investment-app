@@ -146,6 +146,7 @@ create table if not exists public.sharesight_holdings (
   holding_value_aud numeric,
   cost_basis numeric,
   unrealized_gain_loss numeric,
+  realized_gain_loss numeric,
   currency text,
 
   raw jsonb not null default '{}'::jsonb,

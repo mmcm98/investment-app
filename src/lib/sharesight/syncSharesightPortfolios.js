@@ -468,6 +468,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
           holding_value_aud: normalized.holding_value_aud,
           cost_basis: normalized.cost_basis,
           unrealized_gain_loss: normalized.unrealized_gain_loss,
+          realized_gain_loss: normalized.realized_gain_loss,
           currency: normalized.currency,
           raw: normalized.raw,
           sync_run_id: syncRunId,
