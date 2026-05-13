@@ -53,6 +53,15 @@ export async function postChartHistory(symbol, preset = '1Y') {
 /**
  * @param {string} symbol FMP base symbol e.g. AAPL
  */
+export async function postEquityFacts(symbol) {
+  return postMarketBatch({ op: 'equityFacts', symbol })
+}
+
+/**
+ * @param {string} symbol FMP base symbol e.g. AAPL
+ * @param {string} exchangeShort
+ * @param {'3M'|'6M'|'1Y'|'2Y'} period
+ */
 export async function postFmpHistoricalPriceFull(symbol, exchangeShort, period) {
   return postMarketBatch({
     op: 'fmpHistoricalFull',
