@@ -1,4 +1,5 @@
 import { coreEtfTickerMatchesQuoteRow } from '../dca/tickerMatch.js'
+import { isSharesightHoldingClosed } from '../satellite/satelliteMerge.js'
 
 /**
  * Total core sleeve market value in AUD (excludes cash-like holdings) from merged quote rows.
@@ -13,6 +14,8 @@ export function coreSleeveMarketValueExcCashAud(mergedRows) {
     if (`${r.portfolio_role ?? ''}`.toLowerCase() !== 'core') continue
 
     if (r.is_cash_like) continue
+
+    if (Reflect.get(/** @type {Record<string, unknown>} */ (r), 'closed') === true || isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (r))) continue
 
     const hv = typeof r.holding_value_aud === 'number' && Number.isFinite(r.holding_value_aud) ? r.holding_value_aud : null
 
@@ -38,6 +41,8 @@ export function coreHoldingValueAudForTicker(mergedRows, etfTicker) {
     if (`${r.portfolio_role ?? ''}`.toLowerCase() !== 'core') continue
 
     if (r.is_cash_like) continue
+
+    if (Reflect.get(/** @type {Record<string, unknown>} */ (r), 'closed') === true || isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (r))) continue
 
     if (!coreEtfTickerMatchesQuoteRow(r, etfTicker)) continue
 

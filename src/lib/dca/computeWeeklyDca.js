@@ -1,6 +1,7 @@
 import { DEFAULT_GHHF_TIERS, DEFAULT_STANDARD_TIERS } from './defaultTierSchedules.js'
 import { distanceFromAthPercent, matchTier, parseTierBands } from './tierMultiplier.js'
 import { coreEtfTickerMatchesQuoteRow } from './tickerMatch.js'
+import { isSharesightHoldingClosed } from '../satellite/satelliteMerge.js'
 
 const DEFAULT_BASE_WEEKLY_AUD = 350
 const DEFAULT_GEARING = 1.5
@@ -76,6 +77,8 @@ export function findCoreQuoteForTicker(mergedRows, ticker) {
   let best = null
 
   for (const r of core) {
+    if (Reflect.get(/** @type {Record<string, unknown>} */ (r), 'closed') === true || isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (r))) continue
+
     if (!coreEtfTickerMatchesQuoteRow(r, ticker)) continue
 
     if (!best) {
@@ -92,6 +95,8 @@ export function findCoreQuoteForTicker(mergedRows, ticker) {
     const scored = mergedRows.filter((r) => coreEtfTickerMatchesQuoteRow(r, ticker) && !r?.is_cash_like)
 
     for (const r of scored) {
+      if (Reflect.get(/** @type {Record<string, unknown>} */ (r), 'closed') === true || isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (r))) continue
+
       if (!best) {
         best = /** @type {QuoteLikeRow} */ (/** @type {unknown} */ (r))
         continue

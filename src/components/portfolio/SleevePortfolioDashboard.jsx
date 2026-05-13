@@ -328,9 +328,13 @@ export function SleevePortfolioDashboard({ portfolioRole, perfSeries, benchSymbo
           <p className={`rounded-lg border border-[rgba(255,255,255,0.06)] px-4 py-6 text-center text-sm ${theme.muted}`}>
             Loading holdings from Supabase…
           </p>
-        ) : ov.rows.length === 0 ? (
+        ) : ov.rows.length === 0 && ov.closedCount === 0 ? (
           <p className={`rounded-lg border border-[rgba(255,255,255,0.06)] px-4 py-6 text-center text-sm ${theme.muted}`}>
             No rows in <span className="font-mono text-[#79CBFF]">sharesight_holdings</span> for this sleeve yet.
+          </p>
+        ) : ov.rows.length === 0 ? (
+          <p className={`rounded-lg border border-[rgba(255,255,255,0.06)] px-4 py-6 text-center text-sm ${theme.muted}`}>
+            No open positions — all holdings in this sleeve are closed in Sharesight (see below).
           </p>
         ) : null}
 
@@ -400,6 +404,51 @@ export function SleevePortfolioDashboard({ portfolioRole, perfSeries, benchSymbo
             </article>
           ))}
         </div>
+
+        {ov.closedCount > 0 ? (
+          <details className={`mt-6 rounded-xl border ${theme.borderSubtle} bg-[#0A0A0F] p-4`}>
+            <summary className="cursor-pointer font-mono text-xs font-medium text-[#9090A8] hover:text-[#F0F0F8]">
+              Closed positions ({ov.closedCount})
+            </summary>
+
+            <p className={`mt-2 text-xs ${theme.muted}`}>
+              Fully closed or zero-quantity holdings from Sharesight — excluded from sleeve totals and live pricing.
+            </p>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              {ov.closedRows.map((r) => (
+                <article
+                  key={r.rowKey}
+                  className={`rounded-xl border border-[rgba(255,255,255,0.04)] bg-[#111118] p-4 opacity-90`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[rgba(255,255,255,0.06)] pb-3">
+                    <div className="min-w-0">
+                      <p className="font-mono text-sm font-medium text-[#505068]">{r.ticker}</p>
+
+                      <p className="mt-0.5 line-clamp-2 font-sans text-xs text-[#9090A8]">{r.name}</p>
+
+                      <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-[#505068]">Closed</p>
+                    </div>
+                  </div>
+
+                  <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 font-mono text-[11px] tabular-nums text-[#9090A8] md:grid-cols-3">
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-wide text-[#505068]">Qty</dt>
+
+                      <dd className="mt-0.5 text-sm text-[#F0F0F8]">{r.quantity != null ? r.quantity.toLocaleString() : '—'}</dd>
+                    </div>
+
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-wide text-[#505068]">Value (AUD)</dt>
+
+                      <dd className="mt-0.5 text-sm text-[#F0F0F8]">{fmtAud2(r.valueAud)}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
     </section>
   )

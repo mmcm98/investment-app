@@ -4,7 +4,7 @@
  * Core / Satellite “value excluding cash holdings” aligns with drift math guidance.
  */
 
-import { isCashLikeHolding } from '../satellite/satelliteMerge.js'
+import { isCashLikeHolding, isSharesightHoldingClosed } from '../satellite/satelliteMerge.js'
 import { resolveSharesightHoldingValueAud } from '../sharesight/normalizePayloads.js'
 
 /** @param {{ portfolio_role?: string, is_cash_like?: boolean, holding_value_aud?: number|null }} row */
@@ -49,6 +49,8 @@ export function holdingsExCashByRoleAudFromSharesight(rawHoldings) {
   for (const row of rawHoldings) {
     const r = /** @type {Record<string, unknown>} */ (row)
 
+    if (isSharesightHoldingClosed(r)) continue
+
     if (isCashLikeHolding(r)) continue
 
     const hv = resolveSharesightHoldingValueAud(r)
@@ -90,6 +92,8 @@ export function bookValueTotalsFromHoldingsAud(rawHoldings, role) {
 
   for (const row of rawHoldings) {
     const r = /** @type {Record<string, unknown>} */ (row)
+
+    if (isSharesightHoldingClosed(r)) continue
 
     if (`${r.portfolio_role ?? ''}`.trim().toLowerCase() !== role) continue
 

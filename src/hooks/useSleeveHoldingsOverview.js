@@ -7,7 +7,7 @@ import {
   resolveSharesightHoldingQuantity,
   resolveSharesightHoldingValueAud,
 } from '../lib/sharesight/normalizePayloads.js'
-import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
+import { isCashLikeHolding, isSharesightHoldingClosed } from '../lib/satellite/satelliteMerge.js'
 
 /** @param {string|null|undefined} c */
 function currencyIso(c) {
@@ -23,6 +23,84 @@ function numOrFinite(v) {
   const n = Number.parseFloat(`${v ?? ''}`)
 
   return Number.isFinite(n) ? n : null
+}
+
+/**
+ * @param {any} h
+ * @param {any[]} mergedRows
+ * @param {'core'|'satellite'} portfolioRole
+ */
+function buildSleeveOverviewRow(h, mergedRows, portfolioRole) {
+  const hk = `${h.portfolio_role ?? ''}:${h.holding_external_id ?? ''}`
+  const row = /** @type {Record<string, unknown>} */ (h)
+
+  const yahooFromHolding = resolveQuoteIdentity({
+    instrument_symbol: h.instrument_symbol,
+    raw: h.raw && typeof h.raw === 'object' ? /** @type {Record<string, unknown>} */ (h.raw) : {},
+  }).yahooSymbol
+
+  const q =
+    mergedRows.find(
+      (m) =>
+        `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
+        `${m.holding_external_id ?? ''}` === `${h.holding_external_id ?? ''}`,
+    ) ??
+    mergedRows.find(
+      (m) =>
+        `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
+        yahooSymbolsLooselyEqual(`${m.yahoo_symbol ?? ''}`, `${yahooFromHolding ?? ''}`),
+    ) ??
+    null
+
+  const cashLike = isCashLikeHolding({
+    instrument_symbol: h.instrument_symbol,
+    instrument_name: h.instrument_name,
+  })
+
+  const qty = resolveSharesightHoldingQuantity(row)
+  const cost = numOrFinite(
+    Reflect.get(row, 'cost_basis') ?? Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'cost_basis'),
+  )
+
+  const valueAud = resolveSharesightHoldingValueAud(row)
+
+  let uglAud =
+    valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost) ? valueAud - cost : null
+
+  if (uglAud == null && currencyIso(h.currency) === 'AUD') {
+    uglAud = numOrFinite(
+      Reflect.get(row, 'unrealized_gain_loss') ??
+        Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealized_gain_loss') ??
+        Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealised_gain_loss'),
+    )
+  }
+
+  if (uglAud == null && q?.unrealised_gain_aud != null && Number.isFinite(Number(q.unrealised_gain_aud))) {
+    uglAud = Number(q.unrealised_gain_aud)
+  }
+
+  const displayNative = q?.display_native ?? q?.last_price ?? null
+  const displayAud = q?.display_aud ?? null
+
+  const pctUgl =
+    cost != null && cost !== 0 && uglAud != null && Number.isFinite(uglAud) ? (uglAud / Math.abs(cost)) * 100 : null
+
+  return {
+    rowKey: hk,
+    holding: h,
+    mergedQuote: q,
+    cashLike,
+    ticker: `${h.instrument_symbol ?? '—'}`.trim() || '—',
+    name: `${h.instrument_name ?? '—'}`.trim() || '—',
+    quantity: qty,
+    costBasis: cost,
+    unrealisedAud: uglAud,
+    unrealisedPct: pctUgl,
+    valueAud,
+    displayNative,
+    displayAud,
+    quoteCurrency: q?.quote_currency ?? currencyIso(h.currency),
+  }
 }
 
 /**
@@ -84,82 +162,23 @@ export function useSleeveHoldingsOverview(portfolioRole) {
     return () => window.clearTimeout(t)
   }, [reload, holdingsCount])
 
+  const activeHoldings = useMemo(
+    () => (holdings ?? []).filter((h) => !isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (h))),
+    [holdings],
+  )
+
+  const closedHoldings = useMemo(
+    () => (holdings ?? []).filter((h) => isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (h))),
+    [holdings],
+  )
+
   const rows = useMemo(() => {
-    return (holdings ?? []).map((h) => {
-      const hk = `${h.portfolio_role ?? ''}:${h.holding_external_id ?? ''}`
-      const row = /** @type {Record<string, unknown>} */ (h)
+    return activeHoldings.map((h) => buildSleeveOverviewRow(h, mergedRows, portfolioRole))
+  }, [activeHoldings, mergedRows, portfolioRole])
 
-      const yahooFromHolding = resolveQuoteIdentity({
-        instrument_symbol: h.instrument_symbol,
-        raw: h.raw && typeof h.raw === 'object' ? /** @type {Record<string, unknown>} */ (h.raw) : {},
-      }).yahooSymbol
-
-      const q =
-        mergedRows.find(
-          (m) =>
-            `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
-            `${m.holding_external_id ?? ''}` === `${h.holding_external_id ?? ''}`,
-        ) ??
-        mergedRows.find(
-          (m) =>
-            `${m.portfolio_role ?? ''}`.toLowerCase() === `${portfolioRole}`.toLowerCase() &&
-            yahooSymbolsLooselyEqual(`${m.yahoo_symbol ?? ''}`, `${yahooFromHolding ?? ''}`),
-        ) ??
-        null
-
-      const cashLike = isCashLikeHolding({
-        instrument_symbol: h.instrument_symbol,
-        instrument_name: h.instrument_name,
-      })
-
-      const qty = resolveSharesightHoldingQuantity(row)
-      const cost = numOrFinite(
-        Reflect.get(row, 'cost_basis') ?? Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'cost_basis'),
-      )
-
-      const valueAud = resolveSharesightHoldingValueAud(row)
-
-      let uglAud =
-        valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost)
-          ? valueAud - cost
-          : null
-
-      if (uglAud == null && currencyIso(h.currency) === 'AUD') {
-        uglAud = numOrFinite(
-          Reflect.get(row, 'unrealized_gain_loss') ??
-            Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealized_gain_loss') ??
-            Reflect.get(/** @type {Record<string, unknown>} */ (h.raw ?? {}), 'unrealised_gain_loss'),
-        )
-      }
-
-      if (uglAud == null && q?.unrealised_gain_aud != null && Number.isFinite(Number(q.unrealised_gain_aud))) {
-        uglAud = Number(q.unrealised_gain_aud)
-      }
-
-      const displayNative = q?.display_native ?? q?.last_price ?? null
-      const displayAud = q?.display_aud ?? null
-
-      const pctUgl =
-        cost != null && cost !== 0 && uglAud != null && Number.isFinite(uglAud) ? (uglAud / Math.abs(cost)) * 100 : null
-
-      return {
-        rowKey: hk,
-        holding: h,
-        mergedQuote: q,
-        cashLike,
-        ticker: `${h.instrument_symbol ?? '—'}`.trim() || '—',
-        name: `${h.instrument_name ?? '—'}`.trim() || '—',
-        quantity: qty,
-        costBasis: cost,
-        unrealisedAud: uglAud,
-        unrealisedPct: pctUgl,
-        valueAud,
-        displayNative,
-        displayAud,
-        quoteCurrency: q?.quote_currency ?? currencyIso(h.currency),
-      }
-    })
-  }, [holdings, mergedRows, portfolioRole])
+  const closedRows = useMemo(() => {
+    return closedHoldings.map((h) => buildSleeveOverviewRow(h, mergedRows, portfolioRole))
+  }, [closedHoldings, mergedRows, portfolioRole])
 
   const totals = useMemo(() => {
     let sleeveValue = 0
@@ -198,6 +217,8 @@ export function useSleeveHoldingsOverview(portfolioRole) {
     loadError,
     reload,
     rows,
+    closedRows,
+    closedCount: closedRows.length,
     totals,
     donutSlices,
     pricesUpdating,

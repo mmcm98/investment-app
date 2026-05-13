@@ -3,7 +3,7 @@ import { useSharesightIntegration } from '../context/SharesightIntegrationContex
 import { useLivePrices } from '../context/LivePricesContext.jsx'
 import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
 import { computeSatelliteTargetAllocations } from '../lib/satellite/allocationEngine.js'
-import { isCashLikeHolding, numOrNull } from '../lib/satellite/satelliteMerge.js'
+import { isCashLikeHolding, isSharesightHoldingClosed, numOrNull } from '../lib/satellite/satelliteMerge.js'
 import { universalTierFromScore } from '../lib/satellite/tierFromScore.js'
 import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
 
@@ -19,6 +19,7 @@ export function satelliteHoldingsMvTotal(holdings) {
   for (const h of holdings) {
     const row = /** @type {Record<string, unknown>} */ (h)
     if (isCashLikeHolding(row)) continue
+    if (isSharesightHoldingClosed(row)) continue
     const mv = numOrNull(Reflect.get(row, 'market_value'))
     if (mv != null) t += mv
   }
@@ -234,7 +235,9 @@ export function useSatellitePortfolio() {
       if (typeof hk === 'string' && hk) posByHolding[hk] = /** @type {Record<string, unknown>} */ (p)
     }
 
-    const satHoldings = holdings.filter((h) => !isCashLikeHolding(/** @type {Record<string, unknown>} */ (h)))
+    const satHoldings = holdings.filter(
+      (h) => !isCashLikeHolding(/** @type {Record<string, unknown>} */ (h)) && !isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (h))
+    )
 
     /** @type {{ rowKey: string, holding: Record<string, unknown>|null, position: Record<string, unknown>|null }[]} */
     const rows = []

@@ -151,6 +151,8 @@ create table if not exists public.sharesight_holdings (
   raw jsonb not null default '{}'::jsonb,
   sync_run_id uuid references public.sharesight_sync_runs (id) on delete set null,
 
+  closed boolean not null default false,
+
   constraint sharesight_holdings_portfolio_role_valid check (
     portfolio_role in ('core', 'satellite')
   )

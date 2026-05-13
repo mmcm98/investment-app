@@ -34,6 +34,7 @@ import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
  *   unrealized_gain_loss: number|null
  *   currency: string|null
  *   raw: Record<string, unknown>
+ *   closed?: boolean|null
  * }} SharesightHoldingRow */
 
 /** @typedef {{
@@ -60,6 +61,7 @@ import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
  *   holding_value_aud: number|null
  *   unrealised_gain_aud: number|null
  *   day_move_value_aud: number|null
+ *   closed?: boolean|null
  * }} MergedQuoteRow */
 
 /** @type {React.Context<{
@@ -388,9 +390,10 @@ export function LivePricesProvider({ children }) {
     const { data, error } = await supabase
       .from('sharesight_holdings')
       .select(
-        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,currency,raw',
+        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,currency,raw,closed',
       )
       .eq('user_id', uid)
+      .eq('closed', false)
       .order('instrument_symbol', { ascending: true })
 
     if (error) throw error

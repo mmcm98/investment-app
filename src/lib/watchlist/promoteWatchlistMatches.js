@@ -1,6 +1,6 @@
 import { resolveQuoteIdentity } from '../market/sharesightHoldingFx.js'
 
-import { isCashLikeHolding } from '../satellite/satelliteMerge.js'
+import { isCashLikeHolding, isSharesightHoldingClosed } from '../satellite/satelliteMerge.js'
 
 /**
  * @param {string|null|undefined} fmp
@@ -128,6 +128,8 @@ export async function promoteWatchlistMatchesAfterSync(supabase, userId) {
 
   for (const h of holdings ?? []) {
     const ho = /** @type {Record<string, unknown>} */ (h)
+
+    if (isSharesightHoldingClosed(ho)) continue
 
     if (
       isCashLikeHolding({

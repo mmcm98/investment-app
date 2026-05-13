@@ -28,6 +28,7 @@ import {
 } from './oauthCredentialsRepository.js'
 import { mapWithConcurrency } from './asyncPool.js'
 import { promoteWatchlistMatchesAfterSync } from '../watchlist/promoteWatchlistMatches.js'
+import { isSharesightHoldingClosed } from '../satellite/satelliteMerge.js'
 
 function isoDateUtc(d = new Date()) {
   return d.toISOString().slice(0, 10)
@@ -498,7 +499,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
           : [],
     })
 
-    const holdingsForUpsert = dedupedHoldings.map((row) => {
+    const holdingsMerged = dedupedHoldings.map((row) => {
       const r = /** @type {Record<string, unknown>} */ (row)
       const hid = `${r.holding_external_id ?? ''}`.trim()
 
@@ -529,6 +530,11 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
       return out
     })
+
+    const holdingsForUpsert = holdingsMerged.map((row) => ({
+      ...row,
+      closed: isSharesightHoldingClosed(/** @type {Record<string, unknown>} */ (row)),
+    }))
 
     const ghhNorm = holdingsForUpsert.find((r) => `${r.instrument_symbol ?? ''}`.toUpperCase().includes('GHHF'))
 
