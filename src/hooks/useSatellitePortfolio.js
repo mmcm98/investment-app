@@ -3,7 +3,12 @@ import { useSharesightIntegration } from '../context/SharesightIntegrationContex
 import { useLivePrices } from '../context/LivePricesContext.jsx'
 import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
 import { computeSatelliteTargetAllocations } from '../lib/satellite/allocationEngine.js'
-import { isCashLikeHolding, isSharesightHoldingClosed, numOrNull } from '../lib/satellite/satelliteMerge.js'
+import {
+  closedDbIsNotTrueOr,
+  isCashLikeHolding,
+  isSharesightHoldingClosed,
+  numOrNull,
+} from '../lib/satellite/satelliteMerge.js'
 import { universalTierFromScore } from '../lib/satellite/tierFromScore.js'
 import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
 
@@ -104,7 +109,14 @@ export function useSatellitePortfolio() {
 
     const [hRes, pRes, oRes, sRes] = await Promise.all([
       supabase.from('sharesight_holdings').select('*').eq('user_id', uid).eq('portfolio_role', 'satellite').order('instrument_symbol', { ascending: true }),
-      supabase.from('positions').select('*').eq('user_id', uid).eq('kind', 'satellite').eq('archived', false).order('display_ticker', { ascending: true }),
+      supabase
+        .from('positions')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('kind', 'satellite')
+        .eq('archived', false)
+        .or(closedDbIsNotTrueOr)
+        .order('display_ticker', { ascending: true }),
       supabase.from('allocation_overrides').select('*').eq('user_id', uid).eq('active', true),
       supabase.from('user_settings').select('*').eq('user_id', uid).maybeSingle(),
     ])

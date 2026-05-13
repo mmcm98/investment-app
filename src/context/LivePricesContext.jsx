@@ -16,7 +16,7 @@ import { resolveSharesightHoldingQuantity, resolveSharesightHoldingValueAud } fr
 import { yahooSymbolsLooselyEqual } from '../lib/market/tickerMap.js'
 import { postMarketBatch } from '../lib/market/marketApi.js'
 import { shouldRunDailyAthJob, sydneyWallDateIso } from '../lib/market/sydneyClock.js'
-import { isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
+import { closedDbIsNotTrueOr, isCashLikeHolding } from '../lib/satellite/satelliteMerge.js'
 
 /** @typedef {import('@supabase/supabase-js').SupabaseClient} SupabaseClient */
 
@@ -393,7 +393,7 @@ export function LivePricesProvider({ children }) {
         'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,currency,raw,closed',
       )
       .eq('user_id', uid)
-      .eq('closed', false)
+      .or(closedDbIsNotTrueOr)
       .order('instrument_symbol', { ascending: true })
 
     if (error) throw error

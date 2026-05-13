@@ -68,3 +68,9 @@ export function isSharesightHoldingClosed(h) {
 
   return false
 }
+
+/**
+ * PostgREST `.or(...)` fragment: SQL `closed IS NOT TRUE` (null/false = open).
+ * Use on `sharesight_holdings` and `positions` when loading active rows.
+ */
+export const closedDbIsNotTrueOr = 'closed.is.null,closed.eq.false'

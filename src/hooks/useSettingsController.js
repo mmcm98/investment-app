@@ -12,6 +12,8 @@ import { notifyUserSettingsUpdated } from '../lib/settings/settingsEvents.js'
 
 import { resolveSchedulesFromSettings } from '../lib/dca/computeWeeklyDca.js'
 
+import { closedDbIsNotTrueOr } from '../lib/satellite/satelliteMerge.js'
+
 /**
  * @returns {{
  * loading: boolean
@@ -113,7 +115,14 @@ export function useSettingsController() {
         supabase.from('user_settings').select('*').eq('user_id', uid).maybeSingle(),
         supabase.from('core_etfs').select('*').eq('user_id', uid).order('sort_order', { ascending: true }),
         supabase.from('exchange_registry').select('*').eq('user_id', uid).order('sort_order', { ascending: true }),
-        supabase.from('positions').select('*').eq('user_id', uid).eq('kind', 'satellite').eq('archived', false).order('display_ticker'),
+        supabase
+          .from('positions')
+          .select('*')
+          .eq('user_id', uid)
+          .eq('kind', 'satellite')
+          .eq('archived', false)
+          .or(closedDbIsNotTrueOr)
+          .order('display_ticker'),
         supabase.from('positions').select('*').eq('user_id', uid).eq('kind', 'satellite').eq('archived', true).order('display_ticker'),
         supabase.from('watchlist_items').select('*').eq('user_id', uid).eq('archived', false).order('display_ticker'),
         supabase.from('watchlist_items').select('*').eq('user_id', uid).eq('archived', true).order('display_ticker'),

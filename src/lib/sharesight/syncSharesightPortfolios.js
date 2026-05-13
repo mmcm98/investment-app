@@ -87,6 +87,45 @@ function dedupeRowsBy(rows, keyOf) {
   return [...map.values()]
 }
 
+const POSITIONS_CLOSED_MIRROR_CHUNK = 120
+
+/**
+ * Align `positions.closed` with `sharesight_holdings` for rows linked by `sharesight_holding_key`.
+ *
+ * @param {SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{ holding_external_id?: unknown, closed?: unknown }[]} holdingsRows
+ */
+async function mirrorPositionsClosedFromHoldings(supabase, userId, holdingsRows) {
+  /** @type {string[]} */
+  const closedKeys = []
+  /** @type {string[]} */
+  const openKeys = []
+
+  for (const row of holdingsRows) {
+    const id = `${row.holding_external_id ?? ''}`.trim()
+    if (!id) continue
+    if (row.closed === true) closedKeys.push(id)
+    else openKeys.push(id)
+  }
+
+  const runChunk = async (keys, closed) => {
+    for (let i = 0; i < keys.length; i += POSITIONS_CLOSED_MIRROR_CHUNK) {
+      const chunk = keys.slice(i, i + POSITIONS_CLOSED_MIRROR_CHUNK)
+      const { error } = await supabase
+        .from('positions')
+        .update({ closed })
+        .eq('user_id', userId)
+        .in('sharesight_holding_key', chunk)
+
+      if (error) throw error
+    }
+  }
+
+  if (closedKeys.length) await runChunk(closedKeys, true)
+  if (openKeys.length) await runChunk(openKeys, false)
+}
+
 /**
  * Log one raw Sharesight holding payload for debugging normalisation (e.g. GHHF).
  * Safe for production: one structured `console.info` per sync when a match exists.
@@ -552,6 +591,12 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     }
 
     await upsertChunks(supabase, 'sharesight_holdings', holdingsForUpsert, UPSERT_HOLDINGS_ON)
+
+    try {
+      await mirrorPositionsClosedFromHoldings(supabase, userId, holdingsForUpsert)
+    } catch (e) {
+      warnings.push(`positions.closed mirror (${portfolioRole}): ${formatErrorBestEffort(e)}`)
+    }
 
     if (valuationPayload) {
       try {

@@ -10,6 +10,7 @@ import {
   holdingsExCashByRoleAudFromSharesight,
   unrealisedGainSumAud,
 } from '../lib/dashboard/dashboardTotals.js'
+import { closedDbIsNotTrueOr } from '../lib/satellite/satelliteMerge.js'
 
 export function useDashboardData() {
   const { supabase, userPresent, lastSuccessfulSyncAt } = useSharesightIntegration()
@@ -62,7 +63,13 @@ export function useDashboardData() {
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle(),
-        supabase.from('positions').select('*').eq('user_id', uid).eq('kind', 'satellite').eq('archived', false),
+        supabase
+          .from('positions')
+          .select('*')
+          .eq('user_id', uid)
+          .eq('kind', 'satellite')
+          .eq('archived', false)
+          .or(closedDbIsNotTrueOr),
         supabase.from('watchlist_items').select('*').eq('user_id', uid).eq('archived', false).order('display_ticker'),
       ])
 
