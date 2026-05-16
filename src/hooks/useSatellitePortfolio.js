@@ -460,13 +460,13 @@ export function useSatellitePortfolio() {
 
       const valueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
 
-      const uglHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
+      const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
+      const capitalGainPercent = ho ? numOrNull(Reflect.get(ho, 'capital_gain_percent')) : null
+      const totalGainPercent = ho ? numOrNull(Reflect.get(ho, 'total_gain_percent')) : null
 
-      const ugl =
-        uglHo ??
+      const capitalGainAud =
+        capitalGainHo ??
         (valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost) ? valueAud - cost : null)
-
-      const retPct = cost != null && cost !== 0 && ugl != null && Number.isFinite(ugl) ? (ugl / cost) * 100 : null
 
       const avgBuyNative = qty != null && qty !== 0 && cost != null && Number.isFinite(cost) ? cost / qty : null
 
@@ -493,8 +493,9 @@ export function useSatellitePortfolio() {
         quantity: qty,
         costBasis: cost,
         valueAud,
-        capitalGainAud: ugl,
-        returnPct: retPct,
+        capitalGainAud,
+        returnPct: capitalGainPercent,
+        totalReturnPct: totalGainPercent,
         avgBuyNative,
         quoteCurrency,
       }

@@ -33,6 +33,11 @@ import { closedDbIsNotTrueOr, isCashLikeHolding } from '../lib/satellite/satelli
  *   cost_basis: number|null
  *   unrealized_gain_loss: number|null
  *   realized_gain_loss: number|null
+ *   payout_gain: number|null
+ *   currency_gain: number|null
+ *   total_gain: number|null
+ *   capital_gain_percent: number|null
+ *   total_gain_percent: number|null
  *   currency: string|null
  *   raw: Record<string, unknown>
  *   closed?: boolean|null
@@ -391,7 +396,7 @@ export function LivePricesProvider({ children }) {
     const { data, error } = await supabase
       .from('sharesight_holdings')
       .select(
-        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,realized_gain_loss,currency,raw,closed',
+        'id,portfolio_role,portfolio_external_id,holding_external_id,instrument_symbol,instrument_name,quantity,market_value,holding_value_aud,cost_basis,unrealized_gain_loss,realized_gain_loss,payout_gain,currency_gain,total_gain,capital_gain_percent,total_gain_percent,currency,raw,closed',
       )
       .eq('user_id', uid)
       .or(closedDbIsNotTrueOr)

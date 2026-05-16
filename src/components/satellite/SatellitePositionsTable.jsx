@@ -413,7 +413,7 @@ export function SatellitePositionsTable({ tableCards }) {
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118]">
-        <table className="w-full min-w-[960px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1040px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[rgba(255,255,255,0.08)] text-[10px] font-semibold uppercase tracking-wide text-[#505068]">
               <th className="px-3 py-2">Logo</th>
@@ -425,13 +425,14 @@ export function SatellitePositionsTable({ tableCards }) {
               <th className="px-3 py-2 text-right">Value</th>
               <th className="px-3 py-2 text-right">Cap. gain</th>
               <th className="px-3 py-2 text-right">Return</th>
+              <th className="px-3 py-2 text-right">Total return</th>
               <th className="px-3 py-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {keys.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-[#505068]">
+                <td colSpan={11} className="px-4 py-8 text-center text-[#505068]">
                   No rows to display.
                 </td>
               </tr>
@@ -442,7 +443,7 @@ export function SatellitePositionsTable({ tableCards }) {
               return (
                 <Fragment key={`grp:${group}`}>
                   <tr className="bg-[#1A1A24]">
-                    <td colSpan={10} className="px-3 py-2 font-sans text-[13px] font-semibold text-[#F0F0F8]">
+                    <td colSpan={11} className="px-3 py-2 font-sans text-[13px] font-semibold text-[#F0F0F8]">
                       {group}
                     </td>
                   </tr>
@@ -520,6 +521,7 @@ export function SatellitePositionsTable({ tableCards }) {
                             {fmtAud(numFin(row.capitalGainAud))}
                           </td>
                           <td className="px-3 py-2 text-right font-mono text-xs text-[#C8C8D8]">{fmtPct(numFin(row.returnPct))}</td>
+                          <td className="px-3 py-2 text-right font-mono text-xs text-[#C8C8D8]">{fmtPct(numFin(row.totalReturnPct))}</td>
                           <td className="px-3 py-2 text-right align-middle">
                             <div className="flex flex-wrap justify-end gap-1">
                               <button

@@ -12,8 +12,10 @@ import {
   normalizeHolding,
   normalizeTrade,
   normalizePayout,
-  extractCashBalancesFromValuationPayload,
+  extractCashBalancesFromCashAccountsPayload,
   parseValuationHoldingsList,
+  collectPerformanceHoldingLikeRows,
+  normalizeSharesightSymbolKey,
   indexValuationHoldingsByExternalId,
   indexValuationHoldingsByInstrumentCode,
   applyValuationHoldingToSharesightRow,
@@ -71,6 +73,197 @@ const UPSERT_TRADES_ON = 'user_id,portfolio_role,trade_external_id'
 const UPSERT_CASH_ON = 'user_id,portfolio_role,portfolio_external_id,account_key,currency'
 const UPSERT_PERFORMANCE_ON = 'user_id,portfolio_role,portfolio_external_id,start_date,end_date'
 const UPSERT_INCOME_ON = 'user_id,portfolio_role,holding_external_id,income_external_id'
+
+const RAW_HOLDING_AUDIT_TICKERS = /** @type {const} */ (['MP1', 'GHHF'])
+
+/**
+ * Raw Sharesight audit logging only. Keep this free of normalisation or sync decisions.
+ *
+ * @param {string} label
+ * @param {Record<string, unknown>} ctx
+ * @param {unknown} response
+ */
+function logSharesightRaw(label, ctx, response) {
+  console.info(label, {
+    ...ctx,
+    response,
+  })
+}
+
+/** @param {unknown} value */
+function numOrNull(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number.parseFloat(value.trim().replace(/,/g, ''))
+
+    return Number.isFinite(n) ? n : null
+  }
+
+  return null
+}
+
+/** @param {unknown} trade */
+function tradeSymbolKey(trade) {
+  if (!trade || typeof trade !== 'object') return ''
+
+  return normalizeSharesightSymbolKey(Reflect.get(/** @type {Record<string, unknown>} */ (trade), 'symbol'))
+}
+
+/** @param {unknown} type */
+function isBuyTradeType(type) {
+  return `${type ?? ''}`.trim().toLowerCase().includes('buy')
+}
+
+/** @param {unknown} type */
+function isSellTradeType(type) {
+  return `${type ?? ''}`.trim().toLowerCase().includes('sell')
+}
+
+/**
+ * FIFO open-cost basis from Sharesight v2 trades, keyed by symbol.
+ *
+ * @param {unknown[]} trades
+ * @returns {Map<string, number>}
+ */
+function calculateCostBasisBySymbol(trades) {
+  /** @type {Map<string, { qty: number, unitCost: number }[]>} */
+  const lotsBySymbol = new Map()
+
+  const sorted = [...trades].sort((a, b) => tradeExecutedAtMs(a) - tradeExecutedAtMs(b))
+
+  for (const trade of sorted) {
+    if (!trade || typeof trade !== 'object') continue
+
+    const t = /** @type {Record<string, unknown>} */ (trade)
+    const symbol = tradeSymbolKey(t)
+    if (!symbol) continue
+
+    const qty = Math.abs(numOrNull(Reflect.get(t, 'quantity')) ?? 0)
+    if (!qty) continue
+
+    const transactionType = Reflect.get(t, 'transaction_type')
+    const price = numOrNull(Reflect.get(t, 'price')) ?? 0
+    const exchangeRate = numOrNull(Reflect.get(t, 'exchange_rate')) ?? 1
+    const brokerage = numOrNull(Reflect.get(t, 'brokerage')) ?? 0
+    const lots = lotsBySymbol.get(symbol) ?? []
+
+    if (isBuyTradeType(transactionType)) {
+      const cost = qty * price * exchangeRate + brokerage
+      const unitCost = qty > 0 ? cost / qty : 0
+
+      lots.push({ qty, unitCost })
+      lotsBySymbol.set(symbol, lots)
+      continue
+    }
+
+    if (!isSellTradeType(transactionType)) continue
+
+    let remaining = qty
+    while (remaining > 0 && lots.length > 0) {
+      const lot = lots[0]
+      const consumed = Math.min(lot.qty, remaining)
+
+      lot.qty -= consumed
+      remaining -= consumed
+
+      if (lot.qty <= 1e-9) lots.shift()
+    }
+
+    lotsBySymbol.set(symbol, lots)
+  }
+
+  const out = new Map()
+
+  for (const [symbol, lots] of lotsBySymbol.entries()) {
+    const cost = lots.reduce((sum, lot) => sum + lot.qty * lot.unitCost, 0)
+
+    if (Number.isFinite(cost)) out.set(symbol, cost)
+  }
+
+  return out
+}
+
+/** @param {unknown} portfoliosPayload */
+function indexPortfolioInceptionDates(portfoliosPayload) {
+  const payload =
+    portfoliosPayload && typeof portfoliosPayload === 'object'
+      ? /** @type {Record<string, unknown>} */ (portfoliosPayload)
+      : {}
+  const portfolios = Array.isArray(payload.portfolios)
+    ? payload.portfolios
+    : Array.isArray(portfoliosPayload)
+      ? portfoliosPayload
+      : []
+
+  /** @type {Map<string, string>} */
+  const map = new Map()
+
+  for (const portfolio of portfolios) {
+    if (!portfolio || typeof portfolio !== 'object') continue
+
+    const p = /** @type {Record<string, unknown>} */ (portfolio)
+    const ids = [
+      Reflect.get(p, 'id'),
+      Reflect.get(p, 'portfolio_id'),
+      Reflect.get(p, 'uuid'),
+      Reflect.get(p, 'portfolio_uuid'),
+    ]
+      .map((id) => `${id ?? ''}`.trim())
+      .filter(Boolean)
+    const inception = `${Reflect.get(p, 'inception_date') ?? Reflect.get(p, 'start_date') ?? ''}`.trim()
+
+    if (inception) {
+      for (const id of ids) map.set(id, inception.slice(0, 10))
+    }
+  }
+
+  return map
+}
+
+/** @param {unknown} raw */
+function rawHoldingSearchText(raw) {
+  if (!raw || typeof raw !== 'object') return ''
+
+  const h = /** @type {Record<string, unknown>} */ (raw)
+  const inst = h.instrument && typeof h.instrument === 'object' ? /** @type {Record<string, unknown>} */ (h.instrument) : null
+  const holding = h.holding && typeof h.holding === 'object' ? /** @type {Record<string, unknown>} */ (h.holding) : null
+
+  return [
+    Reflect.get(h, 'code'),
+    Reflect.get(h, 'symbol'),
+    Reflect.get(h, 'ticker'),
+    Reflect.get(h, 'name'),
+    Reflect.get(h, 'description'),
+    inst ? Reflect.get(inst, 'code') : null,
+    inst ? Reflect.get(inst, 'symbol') : null,
+    inst ? Reflect.get(inst, 'ticker') : null,
+    inst ? Reflect.get(inst, 'name') : null,
+    holding ? Reflect.get(holding, 'code') : null,
+    holding ? Reflect.get(holding, 'symbol') : null,
+    holding ? Reflect.get(holding, 'ticker') : null,
+    holding ? Reflect.get(holding, 'name') : null,
+  ]
+    .filter((x) => x != null && x !== '')
+    .join('|')
+    .toUpperCase()
+}
+
+/**
+ * @param {unknown[]} holdings
+ * @param {Record<string, unknown>} ctx
+ */
+function logSharesightRawAuditHoldings(holdings, ctx) {
+  for (const ticker of RAW_HOLDING_AUDIT_TICKERS) {
+    const holding = holdings.find((raw) => rawHoldingSearchText(raw).includes(ticker))
+
+    console.info('[sharesight-raw] one holding full object', {
+      ...ctx,
+      ticker,
+      found: Boolean(holding),
+      holding: holding ?? null,
+    })
+  }
+}
 
 /**
  * @template T
@@ -308,7 +501,7 @@ async function upsertChunks(supabase, table, rows, onConflict, chunkSize = 250) 
 }
 
 /**
- * @typedef {{ portfolioRole: 'core'|'satellite', portfolioExternalId: string }} PortfolioTarget
+ * @typedef {{ portfolioRole: 'core'|'satellite', portfolioExternalId: string, inceptionDate: string }} PortfolioTarget
  */
 
 /**
@@ -333,11 +526,6 @@ function tradeExecutedAtMs(raw) {
   return Number.isFinite(ms) ? ms : 0
 }
 
-/** First full trades import: cap total rows. Incremental: fetch newer than cursor only. */
-const TRADES_FIRST_SYNC_MAX = 500
-
-const TRADES_INCREMENTAL_MAX_PAGES = 40
-
 async function syncIncomeForHoldings(supabase, accessToken, holdings) {
   const incomeRowsToInsert = await mapWithConcurrency(2, holdings, async (h) => {
     const payoutsJson = /** @type {any} */ (
@@ -346,6 +534,15 @@ async function syncIncomeForHoldings(supabase, accessToken, holdings) {
         `api/v3/holdings/${encodeURIComponent(h.holding_external_id)}/payouts`,
         { supabase },
       )
+    )
+
+    logSharesightRaw(
+      '[sharesight-raw] payouts',
+      {
+        endpoint: `api/v3/holdings/${encodeURIComponent(h.holding_external_id)}/payouts`,
+        holding_external_id: h.holding_external_id,
+      },
+      payoutsJson,
     )
 
     const payouts = Array.isArray(payoutsJson?.payouts) ? payoutsJson.payouts : Array.isArray(payoutsJson) ? payoutsJson : []
@@ -422,6 +619,15 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
         `api/v3/portfolios/${safePortfolioPath}/holdings`,
         { supabase },
       )
+      logSharesightRaw(
+        '[sharesight-raw] holdings',
+        {
+          endpoint: `api/v3/portfolios/${safePortfolioPath}/holdings`,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+        },
+        holdingsPayload,
+      )
     } catch (reason) {
       warnings.push(`Holdings sync failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
 
@@ -442,6 +648,13 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       : Array.isArray(holdingsPayload)
         ? holdingsPayload
         : []
+
+    logSharesightRawAuditHoldings(holdingsRaw, {
+      endpoint: `api/v3/portfolios/${safePortfolioPath}/holdings`,
+      source: 'holdings',
+      portfolio_role: portfolioRole,
+      portfolio_external_id: portfolioId,
+    })
 
     logSharesightHoldingRawSampleForDebug(holdingsRaw, 'GHHF', {
       portfolio_role: portfolioRole,
@@ -469,6 +682,11 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
           cost_basis: normalized.cost_basis,
           unrealized_gain_loss: normalized.unrealized_gain_loss,
           realized_gain_loss: normalized.realized_gain_loss,
+          payout_gain: normalized.payout_gain,
+          currency_gain: normalized.currency_gain,
+          total_gain: normalized.total_gain,
+          capital_gain_percent: normalized.capital_gain_percent,
+          total_gain_percent: normalized.total_gain_percent,
           currency: normalized.currency,
           raw: normalized.raw,
           sync_run_id: syncRunId,
@@ -490,6 +708,21 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
         `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
         { supabase },
       )
+      logSharesightRaw(
+        '[sharesight-raw] valuation',
+        {
+          endpoint: `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+        },
+        valuationPayload,
+      )
+      logSharesightRawAuditHoldings(parseValuationHoldingsList(valuationPayload), {
+        endpoint: `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
+        source: 'valuation',
+        portfolio_role: portfolioRole,
+        portfolio_external_id: portfolioId,
+      })
     } catch (reason) {
       warnings.push(`Valuation fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
@@ -500,17 +733,67 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     try {
       performancePayload = await sharesightAuthorizedFetch(
         accessToken,
-        `api/v2.1/portfolios/${safePortfolioPath}/performance.json`,
+        `api/v2/portfolios/${safePortfolioPath}/performance.json`,
         {
           supabase,
           searchParams: {
-            start_date: '2000-01-01',
+            start_date: target.inceptionDate,
             end_date: isoDateUtc(),
           },
         },
       )
+      logSharesightRaw(
+        '[sharesight-raw] performance',
+        {
+          endpoint: `api/v2/portfolios/${safePortfolioPath}/performance.json`,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+          start_date: target.inceptionDate,
+          end_date: isoDateUtc(),
+        },
+        performancePayload,
+      )
+      logSharesightRawAuditHoldings(collectPerformanceHoldingLikeRows(performancePayload), {
+        endpoint: `api/v2/portfolios/${safePortfolioPath}/performance.json`,
+        source: 'performance',
+        portfolio_role: portfolioRole,
+        portfolio_external_id: portfolioId,
+      })
     } catch (reason) {
       warnings.push(`Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
+    }
+
+    const tradesResult = await syncPortfolioTrades(
+      supabase,
+      accessToken,
+      userId,
+      syncRunId,
+      portfolioRole,
+      portfolioId,
+    )
+
+    if (tradesResult.warning) warnings.push(tradesResult.warning)
+
+    /** @type {any} */
+    let cashAccountsPayload = null
+
+    try {
+      cashAccountsPayload = await sharesightAuthorizedFetch(
+        accessToken,
+        `api/v2/portfolios/${safePortfolioPath}/cash_accounts.json`,
+        { supabase },
+      )
+      logSharesightRaw(
+        '[sharesight-raw] cash_accounts',
+        {
+          endpoint: `api/v2/portfolios/${safePortfolioPath}/cash_accounts.json`,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+        },
+        cashAccountsPayload,
+      )
+    } catch (reason) {
+      warnings.push(`Cash accounts fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
 
     logValuationResponseSample(valuationPayload, {
@@ -564,9 +847,17 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
       if (vh) out = applyValuationHoldingToSharesightRow(out, vh)
 
-      const ph = hid ? performanceById.get(hid) : undefined
+      const symbolKey = normalizeSharesightSymbolKey(Reflect.get(r, 'instrument_symbol'))
+      const ph = (hid ? performanceById.get(hid) : undefined) ?? (symbolKey ? performanceById.get(`symbol:${symbolKey}`) : undefined)
 
       if (ph) out = applyPerformanceHoldingFillGaps(out, ph)
+
+      if (symbolKey && tradesResult.costBasisBySymbol.has(symbolKey)) {
+        out = {
+          ...out,
+          cost_basis: tradesResult.costBasisBySymbol.get(symbolKey),
+        }
+      }
 
       return out
     })
@@ -587,6 +878,11 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
         holding_value_aud: ghhNorm.holding_value_aud,
         cost_basis: ghhNorm.cost_basis,
         unrealized_gain_loss: ghhNorm.unrealized_gain_loss,
+        payout_gain: ghhNorm.payout_gain,
+        currency_gain: ghhNorm.currency_gain,
+        total_gain: ghhNorm.total_gain,
+        capital_gain_percent: ghhNorm.capital_gain_percent,
+        total_gain_percent: ghhNorm.total_gain_percent,
         currency: ghhNorm.currency,
       })
     }
@@ -599,16 +895,20 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       warnings.push(`positions.closed mirror (${portfolioRole}): ${formatErrorBestEffort(e)}`)
     }
 
-    if (valuationPayload) {
+    if (cashAccountsPayload) {
       try {
-        const cashRowsRaw = extractCashBalancesFromValuationPayload(valuationPayload).map((c) => ({
+        const cashRowsRaw = extractCashBalancesFromCashAccountsPayload(cashAccountsPayload).map((c) => ({
           user_id: userId,
           portfolio_role: portfolioRole,
           portfolio_external_id: portfolioId,
+          portfolio_id: portfolioId,
           account_key: c.account_key,
+          cash_account_id: c.cash_account_id,
           label: c.label,
+          name: c.name,
           currency: c.currency ?? '',
           balance: c.balance,
+          balance_in_portfolio_currency: c.balance_in_portfolio_currency,
           raw: c.raw,
           sync_run_id: syncRunId,
         }))
@@ -620,7 +920,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
         await upsertChunks(supabase, 'sharesight_cash_balances', dedupedCash, UPSERT_CASH_ON)
       } catch (error) {
-        warnings.push(`Valuation / cash balances import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+        warnings.push(`Cash accounts import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
       }
     }
 
@@ -636,7 +936,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
               user_id: userId,
               portfolio_role: portfolioRole,
               portfolio_external_id: portfolioId,
-              start_date: '2000-01-01',
+              start_date: target.inceptionDate,
               end_date: endDate,
               payload: performancePayload,
               sync_run_id: syncRunId,
@@ -677,7 +977,6 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
  * @param {string} syncRunId
  * @param {'core'|'satellite'} portfolioRole
  * @param {string} portfolioId
- * @param {string | null | undefined} tradesCursorIso Newest trade time already synced (incremental watermark)
  */
 async function syncPortfolioTrades(
   supabase,
@@ -686,32 +985,35 @@ async function syncPortfolioTrades(
   syncRunId,
   portfolioRole,
   portfolioId,
-  tradesCursorIso,
 ) {
   const safePortfolioPath = encodeURIComponent(portfolioId)
-
-  const cursorMs = tradesCursorIso ? Date.parse(`${tradesCursorIso}`) : NaN
-  const hasCursor = Number.isFinite(cursorMs)
 
   try {
     const tradesAll = []
 
-    const maxPages = hasCursor ? TRADES_INCREMENTAL_MAX_PAGES : 250
+    const maxPages = 250
 
     for (let page = 1; page <= maxPages; page += 1) {
       /** @type {Record<string, string | number>} */
       const searchParams = { page }
 
-      if (hasCursor) {
-        searchParams.start_date = new Date(cursorMs).toISOString().slice(0, 10)
-      }
-
       /** @type {any} */
       const tradesPayload = /** @type {any} */ (
-        await sharesightAuthorizedFetch(accessToken, `api/v3/portfolios/${safePortfolioPath}/trades.json`, {
+        await sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/trades.json`, {
           supabase,
           searchParams,
         })
+      )
+
+      logSharesightRaw(
+        '[sharesight-raw] trades',
+        {
+          endpoint: `api/v2/portfolios/${safePortfolioPath}/trades.json`,
+          portfolio_role: portfolioRole,
+          portfolio_external_id: portfolioId,
+          page,
+        },
+        tradesPayload,
       )
 
       const pageTrades = Array.isArray(tradesPayload?.trades)
@@ -722,23 +1024,7 @@ async function syncPortfolioTrades(
 
       if (pageTrades.length === 0) break
 
-      if (hasCursor) {
-        const allOlderOrEqual = pageTrades.every((t) => tradeExecutedAtMs(t) <= cursorMs)
-
-        for (const t of pageTrades) {
-          if (tradeExecutedAtMs(t) > cursorMs) tradesAll.push(t)
-        }
-
-        if (allOlderOrEqual) break
-      } else {
-        for (const t of pageTrades) {
-          if (tradesAll.length >= TRADES_FIRST_SYNC_MAX) break
-
-          tradesAll.push(t)
-        }
-
-        if (tradesAll.length >= TRADES_FIRST_SYNC_MAX) break
-      }
+      tradesAll.push(...pageTrades)
     }
 
     const tradeRows = tradesAll
@@ -774,14 +1060,15 @@ async function syncPortfolioTrades(
     if (maxTradeMs > 0) {
       const nextCursor = new Date(maxTradeMs).toISOString()
 
-      if (!hasCursor || maxTradeMs > cursorMs) {
-        await patchSharesightTradeCursor(supabase, portfolioRole, nextCursor)
-      }
+      await patchSharesightTradeCursor(supabase, portfolioRole, nextCursor)
     }
 
-    return null
+    return { warning: null, costBasisBySymbol: calculateCostBasisBySymbol(tradesAll) }
   } catch (error) {
-    return /** @type {string} */ (`Trades import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`)
+    return {
+      warning: /** @type {string} */ (`Trades import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`),
+      costBasisBySymbol: new Map(),
+    }
   }
 }
 
@@ -860,12 +1147,6 @@ export async function syncSharesightPortfolios(supabase, args) {
 
   const { core, satellite } = getSharesightPortfolioUuids()
 
-  /** @type {PortfolioTarget[]} */
-  const targets = [
-    { portfolioRole: 'core', portfolioExternalId: core },
-    { portfolioRole: 'satellite', portfolioExternalId: satellite },
-  ]
-
   /** @type {string | undefined} */
   let accessToken
   try {
@@ -882,6 +1163,36 @@ export async function syncSharesightPortfolios(supabase, args) {
 
     throw error
   }
+
+  /** @type {any} */
+  let portfoliosPayload = null
+
+  try {
+    portfoliosPayload = await sharesightAuthorizedFetch(accessToken, 'api/v2/portfolios.json', { supabase })
+
+    logSharesightRaw('[sharesight-raw] portfolios', { endpoint: 'api/v2/portfolios.json' }, portfoliosPayload)
+  } catch (error) {
+    console.warn('[sharesight-raw] portfolios fetch failed', {
+      endpoint: 'api/v2/portfolios.json',
+      error: formatErrorBestEffort(error),
+    })
+  }
+
+  const inceptionByPortfolioId = indexPortfolioInceptionDates(portfoliosPayload)
+
+  /** @type {PortfolioTarget[]} */
+  const targets = [
+    {
+      portfolioRole: 'core',
+      portfolioExternalId: core,
+      inceptionDate: inceptionByPortfolioId.get(core) ?? '2000-01-01',
+    },
+    {
+      portfolioRole: 'satellite',
+      portfolioExternalId: satellite,
+      inceptionDate: inceptionByPortfolioId.get(satellite) ?? '2000-01-01',
+    },
+  ]
 
   const { data: runRow, error: runErr } = await supabase
     .from('sharesight_sync_runs')
@@ -910,11 +1221,6 @@ export async function syncSharesightPortfolios(supabase, args) {
 
     report('Syncing holdings (core, then satellite)…')
 
-    const { data: oauthRow } = await fetchSharesightOAuthRow(supabase)
-
-    const cursorCore = oauthRow?.trades_cursor_core ?? null
-    const cursorSat = oauthRow?.trades_cursor_satellite ?? null
-
     /** Core then satellite — sequential to reduce parallel 401 pressure. */
 
     const phase1 = []
@@ -936,25 +1242,6 @@ export async function syncSharesightPortfolios(supabase, args) {
     const holdingsSucceededForAllTargets = phase1.every((prt) => prt.holdingsOk)
 
     if (holdingsSucceededForAllTargets) {
-      /** Trades: after holdings IDs exist; portfolios run concurrently (different portfolio_role keys). Pagination stays sequential per portfolio */
-      report('Syncing trade history…')
-
-      for (const prt of phase1) {
-        const tradesCursor = prt.portfolioRole === 'core' ? cursorCore : cursorSat
-
-        const tw = await syncPortfolioTrades(
-          supabase,
-          /** @type {string} */ (accessToken),
-          userId,
-          syncRunId,
-          prt.portfolioRole,
-          prt.portfolioId,
-          tradesCursor,
-        )
-
-        if (typeof tw === 'string') partialWarnings.push(tw)
-      }
-
       report('Syncing income & distributions…')
 
       for (const prt of phase1) {

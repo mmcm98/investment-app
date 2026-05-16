@@ -45,6 +45,14 @@ function coerceNumber(v) {
   return null
 }
 
+/** @param {unknown} symbol */
+export function normalizeSharesightSymbolKey(symbol) {
+  return coerceString(symbol)
+    .toUpperCase()
+    .replace(/^ASX:/i, '')
+    .replace(/\.(AX|AU|L)$/i, '')
+}
+
 /**
  * Best-effort market value in **AUD** from a Sharesight holdings API payload (v2/v3 shapes vary).
  *
@@ -231,37 +239,14 @@ export function normalizeHolding(raw) {
     quantity: pickSharesightQuantityFromRaw(/** @type {Record<string, unknown>} */ (h)),
     market_value,
     holding_value_aud,
-    cost_basis: pickSharesightCostBasisFromHoldingLike(/** @type {Record<string, unknown>} */ (h)) ??
-      coerceNumber(
-        h.cost_basis ??
-          h.opening_cost ??
-          h.opening_cost_base ??
-          h.opening_cost_amount ??
-          h.book_cost ??
-          h.total_cost ??
-          h.investment ??
-          instrument?.cost_basis ??
-          instrument?.opening_cost ??
-          instrument?.book_cost,
-      ),
-    unrealized_gain_loss: coerceNumber(
-      h.unrealised_gain_loss ??
-        h.unrealized_gain_loss ??
-        h.capital_gain ??
-        h.unrealised_capital_gain ??
-        h.unrealised_capital_gain_amount ??
-        instrument?.unrealised_gain_loss ??
-        instrument?.unrealized_gain_loss,
-    ),
-    realized_gain_loss: pickSharesightRealizedGainFromHoldingLike(/** @type {Record<string, unknown>} */ (h)) ??
-      coerceNumber(
-        h.realized_gain_loss ??
-          h.realised_gain_loss ??
-          h.realized_capital_gain ??
-          h.realised_capital_gain ??
-          instrument?.realized_gain_loss ??
-          instrument?.realised_gain_loss,
-      ),
+    cost_basis: null,
+    unrealized_gain_loss: null,
+    realized_gain_loss: null,
+    payout_gain: null,
+    currency_gain: null,
+    total_gain: null,
+    capital_gain_percent: null,
+    total_gain_percent: null,
     currency,
     raw: /** @type {Record<string, unknown>} */ ({ ...h }),
   }
@@ -459,74 +444,7 @@ export function indexValuationHoldingsByInstrumentCode(valuation) {
  * @param {Record<string, unknown>} o
  */
 export function pickSharesightCostBasisFromHoldingLike(o) {
-  const inst = Reflect.get(o, 'instrument')
-  const instObj = inst && typeof inst === 'object' ? /** @type {Record<string, unknown>} */ (inst) : null
-
-  const valObj = Reflect.get(o, 'value')
-  const valRec = valObj && typeof valObj === 'object' ? /** @type {Record<string, unknown>} */ (valObj) : null
-
-  const qty = pickSharesightQuantityFromRaw(o)
-
-  const direct = coerceNumber(
-    Reflect.get(o, 'cost_basis') ??
-      Reflect.get(o, 'cost_value') ??
-      Reflect.get(o, 'cost_amount') ??
-      Reflect.get(o, 'opening_balance') ??
-      Reflect.get(o, 'opening_balance_amount') ??
-      Reflect.get(o, 'opening_cost') ??
-      Reflect.get(o, 'opening_cost_base') ??
-      Reflect.get(o, 'opening_cost_amount') ??
-      Reflect.get(o, 'book_cost') ??
-      Reflect.get(o, 'total_book_cost') ??
-      Reflect.get(o, 'total_cost') ??
-      Reflect.get(o, 'investment') ??
-      Reflect.get(o, 'historical_cost') ??
-      Reflect.get(o, 'book_value') ??
-      Reflect.get(o, 'cost') ??
-      Reflect.get(o, 'purchase_cost') ??
-      Reflect.get(o, 'total_purchase_value'),
-  )
-
-  if (direct != null) return direct
-
-  if (valRec) {
-    const fromVal = coerceNumber(
-      Reflect.get(valRec, 'cost_basis') ??
-        Reflect.get(valRec, 'cost') ??
-        Reflect.get(valRec, 'opening_balance') ??
-        Reflect.get(valRec, 'book_cost') ??
-        Reflect.get(valRec, 'total_cost'),
-    )
-
-    if (fromVal != null) return fromVal
-  }
-
-  if (instObj) {
-    const fromInst = coerceNumber(
-      Reflect.get(instObj, 'cost_basis') ??
-        Reflect.get(instObj, 'opening_cost') ??
-        Reflect.get(instObj, 'book_cost') ??
-        Reflect.get(instObj, 'total_cost') ??
-        Reflect.get(instObj, 'cost_value'),
-    )
-
-    if (fromInst != null) return fromInst
-  }
-
-  const ppUnit = coerceNumber(
-    Reflect.get(o, 'purchase_price') ??
-      Reflect.get(o, 'average_purchase_price') ??
-      Reflect.get(o, 'average_buy_price') ??
-      Reflect.get(o, 'average_cost') ??
-      Reflect.get(o, 'average_cost_per_share'),
-  )
-
-  if (ppUnit != null && qty != null && qty !== 0) {
-    const t = ppUnit * qty
-
-    if (Number.isFinite(t)) return t
-  }
-
+  void o
   return null
 }
 
@@ -588,14 +506,6 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
       Reflect.get(v, 'close_value') ??
       Reflect.get(v, 'value'),
   )
-  const cost = pickSharesightCostBasisFromHoldingLike(/** @type {Record<string, unknown>} */ (v))
-  const uglFromApi = coerceNumber(
-    Reflect.get(v, 'unrealized_gain_loss') ??
-      Reflect.get(v, 'unrealised_gain_loss') ??
-      Reflect.get(v, 'unrealized_capital_gain') ??
-      Reflect.get(v, 'unrealised_capital_gain') ??
-      Reflect.get(v, 'capital_gain_unrealized'),
-  )
   const currency = coerceString(
     Reflect.get(v, 'instrument_currency') ??
       Reflect.get(v, 'currency_code') ??
@@ -620,38 +530,21 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
 
   rawBase.sharesight_valuation_holding = {
     id: Reflect.get(v, 'id'),
+    symbol: Reflect.get(v, 'symbol'),
     quantity: Reflect.get(v, 'quantity'),
     value: Reflect.get(v, 'value'),
-    market_value: Reflect.get(v, 'market_value'),
-    cost_basis: Reflect.get(v, 'cost_basis'),
-    cost_value: Reflect.get(v, 'cost_value'),
-    opening_balance: Reflect.get(v, 'opening_balance'),
-    purchase_price: Reflect.get(v, 'purchase_price'),
-    unrealized_gain_loss: Reflect.get(v, 'unrealized_gain_loss') ?? Reflect.get(v, 'unrealised_gain_loss'),
   }
 
   const prevQty = coerceNumber(Reflect.get(row, 'quantity'))
   const prevMv = coerceNumber(Reflect.get(row, 'market_value'))
   const prevHv = coerceNumber(Reflect.get(row, 'holding_value_aud'))
-  const prevCost = coerceNumber(Reflect.get(row, 'cost_basis'))
-  const prevUgl = coerceNumber(Reflect.get(row, 'unrealized_gain_loss'))
-
-  const costOut = cost != null ? cost : prevCost
   const hvOut = holdingValueAud != null ? holdingValueAud : prevHv
-
-  let uglOut = uglFromApi != null && Number.isFinite(uglFromApi) ? uglFromApi : prevUgl
-
-  if ((uglOut == null || !Number.isFinite(uglOut)) && hvOut != null && costOut != null && Number.isFinite(hvOut) && Number.isFinite(costOut)) {
-    uglOut = hvOut - costOut
-  }
 
   return {
     ...row,
     quantity: qty != null ? qty : prevQty,
     market_value: marketVal != null ? marketVal : prevMv,
     holding_value_aud: hvOut,
-    cost_basis: costOut,
-    unrealized_gain_loss: uglOut,
     currency: currency || `${Reflect.get(row, 'currency') ?? ''}`,
     raw: rawBase,
   }
@@ -667,24 +560,8 @@ export function collectPerformanceHoldingLikeRows(performance) {
   if (!performance || typeof performance !== 'object') return []
 
   const p = /** @type {Record<string, unknown>} */ (performance)
-  /** @type {unknown[]} */
-  const out = []
 
-  for (const k of ['holdings', 'open_positions', 'positions', 'portfolio_holdings']) {
-    const a = Reflect.get(p, k)
-
-    if (Array.isArray(a)) out.push(...a)
-  }
-
-  const port = Reflect.get(p, 'portfolio')
-
-  if (port && typeof port === 'object') {
-    const h = Reflect.get(/** @type {Record<string, unknown>} */ (port), 'holdings')
-
-    if (Array.isArray(h)) out.push(...h)
-  }
-
-  return out
+  return Array.isArray(p.holdings) ? p.holdings : []
 }
 
 /**
@@ -703,13 +580,8 @@ export function indexPerformanceHoldingsByExternalId(performance) {
 
     if (hid) map.set(hid, o)
 
-    const inst = Reflect.get(o, 'instrument')
-
-    if (inst && typeof inst === 'object') {
-      const iid = coerceString(Reflect.get(/** @type {Record<string, unknown>} */ (inst), 'id'))
-
-      if (iid) map.set(iid, o)
-    }
+    const symbol = normalizeSharesightSymbolKey(Reflect.get(o, 'symbol'))
+    if (symbol) map.set(`symbol:${symbol}`, o)
   }
 
   return map
@@ -722,9 +594,6 @@ export function indexPerformanceHoldingsByExternalId(performance) {
  * @param {Record<string, unknown>} perfRow
  */
 export function applyPerformanceHoldingFillGaps(row, perfRow) {
-  const inst = Reflect.get(perfRow, 'instrument')
-  const instObj = inst && typeof inst === 'object' ? /** @type {Record<string, unknown>} */ (inst) : null
-
   const qty = pickSharesightQuantityFromRaw(perfRow)
   const marketVal = coerceNumber(
     Reflect.get(perfRow, 'market_value') ??
@@ -732,52 +601,15 @@ export function applyPerformanceHoldingFillGaps(row, perfRow) {
       Reflect.get(perfRow, 'latest_close_value'),
   )
 
-  let cost = pickSharesightCostBasisFromHoldingLike(/** @type {Record<string, unknown>} */ (perfRow))
-
-  if (cost == null && instObj) cost = pickSharesightCostBasisFromHoldingLike(instObj)
-
-  if (cost == null) {
-    cost = coerceNumber(
-      Reflect.get(perfRow, 'cost_basis') ??
-        Reflect.get(perfRow, 'opening_cost') ??
-        Reflect.get(perfRow, 'book_cost') ??
-        Reflect.get(perfRow, 'total_cost'),
-    )
-  }
-
-  let ugl = coerceNumber(
-    Reflect.get(perfRow, 'unrealized_gain_loss') ??
-      Reflect.get(perfRow, 'unrealised_gain_loss') ??
-      Reflect.get(perfRow, 'unrealized_capital_gain') ??
-      Reflect.get(perfRow, 'unrealised_capital_gain'),
-  )
-
-  if (ugl == null && instObj) {
-    ugl = coerceNumber(
-      Reflect.get(instObj, 'unrealized_gain_loss') ??
-        Reflect.get(instObj, 'unrealised_gain_loss') ??
-        Reflect.get(instObj, 'unrealized_capital_gain'),
-    )
-  }
-
-  let rgl = pickSharesightRealizedGainFromHoldingLike(/** @type {Record<string, unknown>} */ (perfRow))
-
-  if (rgl == null && instObj) rgl = pickSharesightRealizedGainFromHoldingLike(instObj)
-
-  if (rgl == null) {
-    rgl = coerceNumber(
-      Reflect.get(perfRow, 'realized_gain_loss') ??
-        Reflect.get(perfRow, 'realised_gain_loss') ??
-        Reflect.get(perfRow, 'capital_gain_realized') ??
-        Reflect.get(perfRow, 'realized_capital_gain'),
-    )
-  }
+  const capitalGain = coerceNumber(Reflect.get(perfRow, 'capital_gain'))
+  const payoutGain = coerceNumber(Reflect.get(perfRow, 'payout_gain'))
+  const currencyGain = coerceNumber(Reflect.get(perfRow, 'currency_gain'))
+  const totalGain = coerceNumber(Reflect.get(perfRow, 'total_gain'))
+  const capitalGainPercent = coerceNumber(Reflect.get(perfRow, 'capital_gain_percent'))
+  const totalGainPercent = coerceNumber(Reflect.get(perfRow, 'total_gain_percent'))
 
   const prevQty = coerceNumber(Reflect.get(row, 'quantity'))
   const prevMv = coerceNumber(Reflect.get(row, 'market_value'))
-  const prevCost = coerceNumber(Reflect.get(row, 'cost_basis'))
-  const prevUgl = coerceNumber(Reflect.get(row, 'unrealized_gain_loss'))
-  const prevRgl = coerceNumber(Reflect.get(row, 'realized_gain_loss'))
 
   const currency = coerceString(
     Reflect.get(perfRow, 'instrument_currency') ??
@@ -787,9 +619,6 @@ export function applyPerformanceHoldingFillGaps(row, perfRow) {
 
   const nextQty = prevQty == null && qty != null ? qty : prevQty
   const nextMv = prevMv == null && marketVal != null ? marketVal : prevMv
-  const nextCost = prevCost == null && cost != null ? cost : prevCost
-  let nextUgl = prevUgl == null && ugl != null ? ugl : prevUgl
-  const nextRgl = prevRgl == null && rgl != null ? rgl : prevRgl
 
   let nextHv = coerceNumber(Reflect.get(row, 'holding_value_aud'))
 
@@ -801,36 +630,73 @@ export function applyPerformanceHoldingFillGaps(row, perfRow) {
     nextHv = fromPick != null ? fromPick : cur === 'AUD' && nextMv != null ? nextMv : null
   }
 
-  if ((nextUgl == null || !Number.isFinite(nextUgl)) && nextHv != null && nextCost != null && Number.isFinite(nextHv) && Number.isFinite(nextCost)) {
-    nextUgl = nextHv - nextCost
-  }
-
   const rawBase =
     row.raw && typeof row.raw === 'object' ? /** @type {Record<string, unknown>} */ ({ ...row.raw }) : {}
 
   rawBase.sharesight_performance_holding = {
     id: Reflect.get(perfRow, 'id'),
+    symbol: Reflect.get(perfRow, 'symbol'),
+    market: Reflect.get(perfRow, 'market'),
+    name: Reflect.get(perfRow, 'name'),
     quantity: Reflect.get(perfRow, 'quantity'),
     value: Reflect.get(perfRow, 'value'),
-    market_value: Reflect.get(perfRow, 'market_value'),
-    cost_basis: Reflect.get(perfRow, 'cost_basis'),
-    cost_value: Reflect.get(perfRow, 'cost_value'),
-    opening_balance: Reflect.get(perfRow, 'opening_balance'),
-    unrealized_gain_loss: Reflect.get(perfRow, 'unrealized_gain_loss') ?? Reflect.get(perfRow, 'unrealised_gain_loss'),
-    realized_gain_loss: Reflect.get(perfRow, 'realized_gain_loss') ?? Reflect.get(perfRow, 'realised_gain_loss'),
+    capital_gain: Reflect.get(perfRow, 'capital_gain'),
+    capital_gain_percent: Reflect.get(perfRow, 'capital_gain_percent'),
+    payout_gain: Reflect.get(perfRow, 'payout_gain'),
+    payout_gain_percent: Reflect.get(perfRow, 'payout_gain_percent'),
+    currency_gain: Reflect.get(perfRow, 'currency_gain'),
+    currency_gain_percent: Reflect.get(perfRow, 'currency_gain_percent'),
+    total_gain: Reflect.get(perfRow, 'total_gain'),
+    total_gain_percent: Reflect.get(perfRow, 'total_gain_percent'),
   }
 
   return {
     ...row,
     quantity: nextQty,
     market_value: nextMv,
-    cost_basis: nextCost,
-    unrealized_gain_loss: nextUgl,
-    realized_gain_loss: nextRgl,
+    unrealized_gain_loss: capitalGain != null ? capitalGain : Reflect.get(row, 'unrealized_gain_loss'),
+    payout_gain: payoutGain != null ? payoutGain : Reflect.get(row, 'payout_gain'),
+    currency_gain: currencyGain != null ? currencyGain : Reflect.get(row, 'currency_gain'),
+    total_gain: totalGain != null ? totalGain : Reflect.get(row, 'total_gain'),
+    capital_gain_percent: capitalGainPercent != null ? capitalGainPercent : Reflect.get(row, 'capital_gain_percent'),
+    total_gain_percent: totalGainPercent != null ? totalGainPercent : Reflect.get(row, 'total_gain_percent'),
     holding_value_aud: nextHv != null ? nextHv : Reflect.get(row, 'holding_value_aud'),
     currency: currency || `${Reflect.get(row, 'currency') ?? ''}`,
     raw: rawBase,
   }
+}
+
+/** @param {unknown} cashPayload */
+export function extractCashBalancesFromCashAccountsPayload(cashPayload) {
+  const payload = cashPayload && typeof cashPayload === 'object' ? /** @type {Record<string, unknown>} */ (cashPayload) : {}
+  const rawAccounts = Array.isArray(payload.cash_accounts)
+    ? payload.cash_accounts
+    : Array.isArray(payload.accounts)
+      ? payload.accounts
+      : Array.isArray(cashPayload)
+        ? cashPayload
+        : []
+
+  return rawAccounts
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+
+      const account = /** @type {Record<string, unknown>} */ (item)
+      const id = coerceString(Reflect.get(account, 'id'))
+      const currency = coerceString(Reflect.get(account, 'currency') ?? Reflect.get(account, 'currency_code'))
+
+      return {
+        cash_account_id: id,
+        account_key: id || coerceString(Reflect.get(account, 'name')) || 'cash_account:unknown',
+        name: coerceString(Reflect.get(account, 'name')),
+        label: coerceString(Reflect.get(account, 'name')),
+        currency,
+        balance: coerceNumber(Reflect.get(account, 'balance')),
+        balance_in_portfolio_currency: coerceNumber(Reflect.get(account, 'balance_in_portfolio_currency')),
+        raw: /** @type {Record<string, unknown>} */ ({ ...account }),
+      }
+    })
+    .filter(Boolean)
 }
 
 /** @param {unknown} valuation */
