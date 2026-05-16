@@ -111,27 +111,27 @@ function tradeSymbolKey(trade) {
 
 /** @param {unknown} type */
 function isBuyTradeType(type) {
-  return `${type ?? ''}`.trim().toLowerCase().includes('buy')
+  const t = `${type ?? ''}`.trim().toUpperCase()
+
+  return t === 'BUY' || t === 'OPENING_BALANCE'
 }
 
 /** @param {unknown} type */
 function isSellTradeType(type) {
-  return `${type ?? ''}`.trim().toLowerCase().includes('sell')
+  return `${type ?? ''}`.trim().toUpperCase() === 'SELL'
 }
 
 /**
- * FIFO open-cost basis from Sharesight v2 trades, keyed by symbol.
+ * Weighted-average open-cost basis from Sharesight v2 trades, keyed by symbol.
  *
  * @param {unknown[]} trades
  * @returns {Map<string, number>}
  */
 function calculateCostBasisBySymbol(trades) {
-  /** @type {Map<string, { qty: number, unitCost: number }[]>} */
-  const lotsBySymbol = new Map()
+  /** @type {Map<string, { buyQty: number, buyCost: number, sellQty: number, trades: unknown[] }>} */
+  const totalsBySymbol = new Map()
 
-  const sorted = [...trades].sort((a, b) => tradeExecutedAtMs(a) - tradeExecutedAtMs(b))
-
-  for (const trade of sorted) {
+  for (const trade of trades) {
     if (!trade || typeof trade !== 'object') continue
 
     const t = /** @type {Record<string, unknown>} */ (trade)
@@ -143,41 +143,48 @@ function calculateCostBasisBySymbol(trades) {
 
     const transactionType = Reflect.get(t, 'transaction_type')
     const price = numOrNull(Reflect.get(t, 'price')) ?? 0
-    const exchangeRate = numOrNull(Reflect.get(t, 'exchange_rate')) ?? 1
-    const brokerage = numOrNull(Reflect.get(t, 'brokerage')) ?? 0
-    const lots = lotsBySymbol.get(symbol) ?? []
+    const tradeCurrency = `${Reflect.get(t, 'currency') ?? Reflect.get(t, 'currency_code') ?? ''}`.trim().toUpperCase()
+    const exchangeRate = tradeCurrency === 'AUD' ? 1 : (numOrNull(Reflect.get(t, 'exchange_rate')) ?? 1)
+    const totals = totalsBySymbol.get(symbol) ?? { buyQty: 0, buyCost: 0, sellQty: 0, trades: [] }
+
+    totals.trades.push(trade)
 
     if (isBuyTradeType(transactionType)) {
-      const cost = qty * price * exchangeRate + brokerage
-      const unitCost = qty > 0 ? cost / qty : 0
-
-      lots.push({ qty, unitCost })
-      lotsBySymbol.set(symbol, lots)
+      totals.buyQty += qty
+      totals.buyCost += qty * price * exchangeRate
+      totalsBySymbol.set(symbol, totals)
       continue
     }
 
-    if (!isSellTradeType(transactionType)) continue
-
-    let remaining = qty
-    while (remaining > 0 && lots.length > 0) {
-      const lot = lots[0]
-      const consumed = Math.min(lot.qty, remaining)
-
-      lot.qty -= consumed
-      remaining -= consumed
-
-      if (lot.qty <= 1e-9) lots.shift()
+    if (isSellTradeType(transactionType)) {
+      totals.sellQty += qty
+      totalsBySymbol.set(symbol, totals)
     }
-
-    lotsBySymbol.set(symbol, lots)
   }
 
   const out = new Map()
 
-  for (const [symbol, lots] of lotsBySymbol.entries()) {
-    const cost = lots.reduce((sum, lot) => sum + lot.qty * lot.unitCost, 0)
+  for (const [symbol, totals] of totalsBySymbol.entries()) {
+    if (totals.buyQty <= 0) continue
 
-    if (Number.isFinite(cost)) out.set(symbol, cost)
+    const currentQuantity = Math.max(totals.buyQty - totals.sellQty, 0)
+    const averageBuyPrice = totals.buyCost / totals.buyQty
+    const costBasis = averageBuyPrice * currentQuantity
+
+    if (symbol === 'MP1') {
+      console.info('[sharesight-sync] mp1_cost_basis_trades', {
+        symbol,
+        raw_trades: totals.trades,
+        total_bought_quantity: totals.buyQty,
+        total_sold_quantity: totals.sellQty,
+        current_quantity: currentQuantity,
+        total_buy_cost_aud: totals.buyCost,
+        average_buy_price_aud: averageBuyPrice,
+        cost_basis_aud: costBasis,
+      })
+    }
+
+    if (Number.isFinite(costBasis)) out.set(symbol, costBasis)
   }
 
   return out
