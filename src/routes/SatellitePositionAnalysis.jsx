@@ -202,7 +202,7 @@ export function SatellitePositionAnalysis() {
     } catch (error) {
       if (timer) clearInterval(timer)
       setAnalysisPhase('error')
-      setAnalysisMessage(error instanceof Error ? error.message : String(error))
+      setAnalysisMessage(error?.message || error?.error || String(error) || 'Unknown error')
     }
   }
 
