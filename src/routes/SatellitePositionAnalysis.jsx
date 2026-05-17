@@ -90,6 +90,9 @@ export function SatellitePositionAnalysis() {
 
   const row = useMemo(() => {
     return (
+      rows.find((r) => `${r.holdingId ?? ''}` === routeId) ??
+      rows.find((r) => `${r.id ?? ''}` === routeId) ??
+      rows.find((r) => `${r.sharesight_id ?? ''}` === routeId) ??
       rows.find((r) => `${r.positionId ?? ''}` === routeId) ??
       rows.find((r) => `${Reflect.get(/** @type {Record<string, unknown>} */ (r.holding ?? {}), 'holding_external_id') ?? ''}` === routeId) ??
       rows.find((r) => `${r.rowKey ?? ''}` === routeId) ??

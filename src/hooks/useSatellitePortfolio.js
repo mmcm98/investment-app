@@ -547,6 +547,7 @@ export function useSatellitePortfolio() {
       const pos = c.position
       const h = c.holding
       const ho = /** @type {Record<string, unknown>|null} */ (h)
+      const holdingId = ho ? `${Reflect.get(ho, 'holding_external_id') ?? ''}`.trim() : ''
 
       const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
       const raw = ho && Reflect.get(ho, 'raw')
@@ -596,6 +597,7 @@ export function useSatellitePortfolio() {
 
       return {
         ...c,
+        holdingId,
         rowClosed,
         isCashLike: isCashLikeRow,
         exchange,

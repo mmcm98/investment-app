@@ -304,6 +304,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
             : null
       const cur = `${row.quoteCurrency ?? ''}`.trim()
       const pid = row.positionId ? `${row.positionId}` : ''
+      const holdingId = `${row.holdingId || row.id || row.sharesight_id || ''}`.trim()
       const currentType = `${row.assetClass ?? ''}`.trim()
       const rowKey = `${row.rowKey ?? ''}`
 
@@ -385,8 +386,8 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
         case 'totalReturn':
           return fmtAud(numFin(row.totalGainAud))
         case 'actions':
-          return pid ? (
-            <Link className="whitespace-nowrap font-mono text-[11px] text-[#4DB8FF] hover:text-[#79CBFF]" to={`/satellite/position/${pid}`}>
+          return holdingId ? (
+            <Link className="whitespace-nowrap font-mono text-[11px] text-[#4DB8FF] hover:text-[#79CBFF]" to={`/satellite/position/${holdingId}`}>
               See analysis →
             </Link>
           ) : (
