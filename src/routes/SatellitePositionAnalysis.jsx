@@ -143,6 +143,7 @@ export function SatellitePositionAnalysis() {
   const runDisabled = analysisPhase === 'running' || !runHoldingId
 
   async function runAnalysis() {
+    console.log('[analysis-start] holdingId:', runHoldingId)
     if (!supabase || !runHoldingId) return
 
     setAnalysisPhase('running')
@@ -166,6 +167,7 @@ export function SatellitePositionAnalysis() {
       }, 1000)
 
       const start = await startTriadAnalysis({ holdingId: runHoldingId }, { accessToken: token })
+      console.log('[triad-start-response] ok:', start?.ok, 'status:', start?.status)
       const jobId = start && typeof start === 'object' ? `${Reflect.get(start, 'job_id') ?? ''}`.trim() : ''
       if (!jobId) throw new Error('Triad job was not created.')
 
@@ -202,7 +204,9 @@ export function SatellitePositionAnalysis() {
     } catch (error) {
       if (timer) clearInterval(timer)
       setAnalysisPhase('error')
-      setAnalysisMessage(error?.message || error?.error || String(error) || 'Unknown error')
+      const errorValue = error?.message || error?.error || String(error) || 'Unknown error'
+      console.log('[analysis-error]', typeof errorValue, errorValue)
+      setAnalysisMessage(errorValue)
     }
   }
 
