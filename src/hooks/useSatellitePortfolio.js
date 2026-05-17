@@ -11,7 +11,7 @@ import {
 } from '../lib/satellite/satelliteMerge.js'
 import { universalTierFromScore } from '../lib/satellite/tierFromScore.js'
 import { tickersLooselyEqual } from '../lib/dca/tickerMatch.js'
-import { resolveSharesightHoldingQuantity, resolveSharesightHoldingValueAud } from '../lib/sharesight/normalizePayloads.js'
+import { resolveSharesightHoldingQuantity } from '../lib/sharesight/normalizePayloads.js'
 import { fmpInstrumentSymbol } from '../lib/market/fmpInstrumentSymbol.js'
 
 /** @param {unknown} prefs */
@@ -31,20 +31,6 @@ export function satelliteHoldingsMvTotal(holdings) {
     if (mv != null) t += mv
   }
   return t
-}
-
-/** @param {unknown} value @param {unknown} currency @param {Record<string, { aud_per_unit?: number }>} fxByCurrency */
-function nativeValueToAud(value, currency, fxByCurrency) {
-  const native = numOrNull(value)
-  if (native == null) return null
-
-  const cur = `${currency ?? ''}`.trim().toUpperCase()
-  if (!cur) return null
-  if (cur === 'AUD') return native
-
-  const rate = fxByCurrency[cur]?.aud_per_unit
-
-  return typeof rate === 'number' && Number.isFinite(rate) ? native * rate : null
 }
 
 /** @param {unknown[]} scores */
@@ -207,6 +193,20 @@ function sharesightMarketCodeDisplay(h) {
 }
 
 /** @param {Record<string, unknown>|null|undefined} h */
+function sharesightPortfolioValueAud(h) {
+  const raw = h && Reflect.get(h, 'raw')
+  const rawObj = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : null
+  const valuation = valuationSnapshot(h)
+
+  return numOrNull(
+    (valuation ? Reflect.get(valuation, 'value') : null) ??
+      (rawObj ? Reflect.get(rawObj, 'market_value') : null) ??
+      (rawObj ? Reflect.get(rawObj, 'portfolio_value') : null) ??
+      (rawObj ? Reflect.get(rawObj, 'value') : null),
+  )
+}
+
+/** @param {Record<string, unknown>|null|undefined} h */
 function sharesightExchangeDisplay(h) {
   const direct = h ? `${Reflect.get(h, 'exchange_display') ?? ''}`.trim() : ''
   if (direct) return direct
@@ -246,7 +246,7 @@ function fmpDisplayAndExchange(pos, h) {
 
 export function useSatellitePortfolio() {
   const { supabase, userPresent, holdingsCount } = useSharesightIntegration()
-  const { mergedRows, fxByCurrency } = useLivePrices()
+  const { mergedRows } = useLivePrices()
 
   const [holdings, setHoldings] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [positions, setPositions] = useState(/** @type {Record<string, unknown>[]} */ ([]))
@@ -557,32 +557,7 @@ export function useSatellitePortfolio() {
 
       const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
 
-      const sharesightValueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
-      const nativeHoldingValue = ho ? Reflect.get(ho, 'market_value') : null
-      const nativeCurrency = ho ? Reflect.get(ho, 'currency') : null
-      const fxCurrency = `${nativeCurrency ?? ''}`.trim().toUpperCase()
-      const fxRate = fxByCurrency[fxCurrency]?.aud_per_unit
-      const marketValueNative = numOrNull(nativeHoldingValue)
-      const fxValueAud = nativeValueToAud(
-        nativeHoldingValue,
-        nativeCurrency,
-        /** @type {Record<string, { aud_per_unit?: number }>} */ (fxByCurrency),
-      )
-      const valueAud = sharesightValueAud ?? fxValueAud
-
-      if (sharesightValueAud == null && fxValueAud != null && fxCurrency !== 'AUD') {
-        console.log('[satellite-value-debug]', {
-          ticker: c.ticker,
-          currency: fxCurrency,
-          sharesight_value_aud: sharesightValueAud,
-          market_value_native: marketValueNative,
-          fx_rate: fxRate,
-          calculated_value_aud:
-            marketValueNative != null && typeof fxRate === 'number' && Number.isFinite(fxRate)
-              ? marketValueNative * fxRate
-              : null,
-        })
-      }
+      const valueAud = ho ? sharesightPortfolioValueAud(ho) : null
 
       const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
       const cost = valueAud != null && capitalGainHo != null ? valueAud - capitalGainHo : null
@@ -637,7 +612,7 @@ export function useSatellitePortfolio() {
     const cards = tableCards.filter((c) => !c.rowClosed && !c.isCashLike)
 
     return { cards, tableCards, targetsByPositionId, sumOverrides, remainderValid, totalMv }
-  }, [holdings, positions, latestScores, mergedRows, fxByCurrency, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
+  }, [holdings, positions, latestScores, mergedRows, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
 
   const setPrefShowAud = useCallback(
     async (v) => {
