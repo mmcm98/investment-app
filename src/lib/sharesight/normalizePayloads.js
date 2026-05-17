@@ -45,6 +45,62 @@ function coerceNumber(v) {
   return null
 }
 
+const SHARESIGHT_MARKET_LABELS = {
+  ASX: 'ASX',
+  NZX: 'NZX',
+  NYSE: 'NYSE',
+  NASDAQ: 'NASDAQ',
+  LSE: 'LSE',
+  EURONEXT: 'Euronext',
+  TSE: 'TSE',
+  CVE: 'TSX-V',
+  CNSX: 'CNSX',
+  HKG: 'HKEX',
+  SGX: 'SGX',
+  JSE: 'JSE',
+  FRA: 'FSE',
+  XETR: 'Xetra',
+  SWX: 'SIX',
+  TYO: 'TSE',
+  BIT: 'BIT',
+  BME: 'BME',
+  STO: 'OMX',
+  OSL: 'OSL',
+  AMEX: 'AMEX',
+  BVMF: 'B3',
+  KRX: 'KRX',
+  TAI: 'TWSE',
+  FundAU: 'AU Fund',
+  FundNZ: 'NZ Fund',
+  FundUK: 'UK Fund',
+  FundUS: 'US Fund',
+  FundCA: 'CA Fund',
+  mFund: 'mFund',
+  OTHER: 'Other',
+}
+
+/** @param {Record<string, unknown>} holding */
+function sharesightMarketCodeFromHolding(holding) {
+  const instrument = Reflect.get(holding, 'instrument')
+  const instrumentMarketCode =
+    instrument && typeof instrument === 'object'
+      ? Reflect.get(/** @type {Record<string, unknown>} */ (instrument), 'market_code')
+      : null
+
+  return coerceString(instrumentMarketCode ?? Reflect.get(holding, 'market_code'))
+}
+
+/** @param {string} marketCode */
+function sharesightMarketDisplayLabel(marketCode) {
+  const exact = SHARESIGHT_MARKET_LABELS[/** @type {keyof typeof SHARESIGHT_MARKET_LABELS} */ (marketCode)]
+
+  if (exact) return exact
+
+  const upper = marketCode.toUpperCase()
+
+  return SHARESIGHT_MARKET_LABELS[/** @type {keyof typeof SHARESIGHT_MARKET_LABELS} */ (upper)] ?? marketCode
+}
+
 /** @param {unknown} symbol */
 export function normalizeSharesightSymbolKey(symbol) {
   return coerceString(symbol)
@@ -534,6 +590,9 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     (capitalGain != null && payoutGain != null ? capitalGain + payoutGain : capitalGain)
   const capitalGainPercent = coerceNumber(Reflect.get(v, 'capital_gain_percent') ?? Reflect.get(v, 'gain_loss_percent'))
   const totalGainPercent = coerceNumber(Reflect.get(v, 'total_gain_percent'))
+  const averagePurchasePrice = coerceNumber(Reflect.get(v, 'average_purchase_price'))
+  const marketCode = sharesightMarketCodeFromHolding(v)
+  const exchangeDisplay = marketCode ? sharesightMarketDisplayLabel(marketCode) : ''
   const currency = coerceString(
     Reflect.get(v, 'instrument_currency') ??
       Reflect.get(v, 'currency_code') ??
@@ -563,12 +622,15 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     value: Reflect.get(v, 'value'),
     cost_basis: Reflect.get(v, 'cost_basis'),
     purchase_price: Reflect.get(v, 'purchase_price'),
+    average_purchase_price: averagePurchasePrice,
     total_cost: Reflect.get(v, 'total_cost'),
     capital_gain: Reflect.get(v, 'capital_gain'),
     gain_loss: Reflect.get(v, 'gain_loss'),
     payout_gain: Reflect.get(v, 'payout_gain'),
     currency_gain: Reflect.get(v, 'currency_gain'),
     total_gain: Reflect.get(v, 'total_gain'),
+    market_code: marketCode,
+    exchange_display: exchangeDisplay,
   }
 
   const prevQty = coerceNumber(Reflect.get(row, 'quantity'))

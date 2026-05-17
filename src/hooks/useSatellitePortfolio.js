@@ -116,6 +116,37 @@ function exchangeGroupForRow(pos, h) {
   return 'Other'
 }
 
+/** @param {Record<string, unknown>|null|undefined} h */
+function valuationSnapshot(h) {
+  const raw = h && Reflect.get(h, 'raw')
+
+  if (!raw || typeof raw !== 'object') return null
+
+  const valuation = Reflect.get(/** @type {Record<string, unknown>} */ (raw), 'sharesight_valuation_holding')
+
+  return valuation && typeof valuation === 'object' ? /** @type {Record<string, unknown>} */ (valuation) : null
+}
+
+/** @param {Record<string, unknown>|null|undefined} h */
+function sharesightExchangeDisplay(h) {
+  const direct = h ? `${Reflect.get(h, 'exchange_display') ?? ''}`.trim() : ''
+  if (direct) return direct
+
+  const valuation = valuationSnapshot(h)
+
+  return valuation ? `${Reflect.get(valuation, 'exchange_display') ?? ''}`.trim() : ''
+}
+
+/** @param {Record<string, unknown>|null|undefined} h */
+function sharesightAveragePurchasePriceNative(h) {
+  const direct = h ? numOrNull(Reflect.get(h, 'average_purchase_price')) : null
+  if (direct != null) return direct
+
+  const valuation = valuationSnapshot(h)
+
+  return valuation ? numOrNull(Reflect.get(valuation, 'average_purchase_price')) : null
+}
+
 /**
  * @param {Record<string, unknown>|null} pos
  * @param {Record<string, unknown>|null|undefined} h
@@ -124,23 +155,24 @@ function fmpDisplayAndExchange(pos, h) {
   const ho = /** @type {Record<string, unknown>|null} */ (h)
   const inst = ho ? `${Reflect.get(ho, 'instrument_symbol') ?? ''}`.trim() : ''
   const inferredExchange = /^ASX:/i.test(inst) ? 'ASX' : /^LSE:/i.test(inst) ? 'LSE' : ''
+  const exchangeDisplay = sharesightExchangeDisplay(ho)
 
   if (pos) {
     return {
       fmp: `${Reflect.get(pos, 'fmp_symbol') ?? ''}`.trim(),
-      exchangeShort: `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim() || inferredExchange || '—',
+      exchangeShort: `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim() || exchangeDisplay || '—',
     }
   }
 
   const m = inst.match(/^ASX:\s*(.+)$/i)
 
-  if (m) return { fmp: `${m[1] ?? ''}`.trim(), exchangeShort: 'ASX' }
+  if (m) return { fmp: `${m[1] ?? ''}`.trim(), exchangeShort: exchangeDisplay || 'ASX' }
 
   const m2 = inst.match(/^LSE:\s*(.+)$/i)
 
-  if (m2) return { fmp: `${m2[1] ?? ''}`.trim(), exchangeShort: 'LSE' }
+  if (m2) return { fmp: `${m2[1] ?? ''}`.trim(), exchangeShort: exchangeDisplay || 'LSE' }
 
-  return { fmp: inst.replace(/^=/, ''), exchangeShort: inferredExchange || '—' }
+  return { fmp: inst.replace(/^=/, ''), exchangeShort: exchangeDisplay || inferredExchange || '—' }
 }
 
 export function useSatellitePortfolio() {
@@ -474,7 +506,10 @@ export function useSatellitePortfolio() {
         capitalGainHo ??
         (valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost) ? valueAud - cost : null)
 
-      const avgBuyNative = qty != null && qty !== 0 && cost != null && Number.isFinite(cost) ? cost / qty : null
+      const avgBuyFromSharesight = sharesightAveragePurchasePriceNative(ho)
+      const avgBuyNative =
+        avgBuyFromSharesight ??
+        (qty != null && qty !== 0 && cost != null && Number.isFinite(cost) ? cost / qty : null)
 
       const q = c.mergedQuote
 
