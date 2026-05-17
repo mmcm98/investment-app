@@ -100,6 +100,11 @@ async function requestTriadJson(path, opts) {
   })
   const text = await res.text()
 
+  if (path === '/api/analysis/triad-start') {
+    console.log('[triad-start] status:', res.status)
+    console.log('[triad-start] raw response:', text)
+  }
+
   /** @type {unknown} */
   let json
 
