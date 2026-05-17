@@ -5,6 +5,8 @@
  */
 import http from 'node:http'
 import triadHandler from '../api/analysis/triad.js'
+import triadStartHandler from '../api/analysis/triad-start.js'
+import triadStatusHandler from '../api/analysis/triad-status.js'
 import watchlistFlashHandler from '../api/analysis/watchlistFlash.js'
 import portfolioBriefingHandler from '../api/analysis/portfolio-briefing.js'
 
@@ -20,6 +22,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = `${req.url ?? ''}`
+
+  if (url.startsWith('/analysis/triad-start')) {
+    await triadStartHandler(req, res)
+
+    return
+  }
+
+  if (url.startsWith('/analysis/triad-status')) {
+    await triadStatusHandler(req, res)
+
+    return
+  }
 
   if (url.startsWith('/analysis/triad')) {
     await triadHandler(req, res)

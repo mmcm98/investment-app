@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
-import { postTriadAnalysis } from '../lib/analysis/triadClient.js'
+import { getTriadAnalysisJob, startTriadAnalysis } from '../lib/analysis/triadClient.js'
 
 const TABS = /** @type {const} */ ([
   { id: 'scorecard', label: 'Scorecard' },
@@ -81,6 +81,16 @@ function EmptyState({ children }) {
   )
 }
 
+function analysisProgressMessage(elapsedSeconds) {
+  if (elapsedSeconds < 20) return 'Gathering research with Gemini...'
+  if (elapsedSeconds < 60) return 'Synthesising scorecard with Claude...'
+  return 'Finalising results...'
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export function SatellitePositionAnalysis() {
   const params = useParams()
   const navigate = useNavigate()
@@ -89,6 +99,7 @@ export function SatellitePositionAnalysis() {
   const [tab, setTab] = useState(/** @type {(typeof TABS)[number]['id']} */ ('scorecard'))
   const [analysisPhase, setAnalysisPhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
   const [analysisMessage, setAnalysisMessage] = useState('')
+  const [analysisElapsed, setAnalysisElapsed] = useState(0)
 
   const routeId = `${params.id ?? params.holdingId ?? ''}`.trim()
   const rows = useMemo(() => /** @type {Record<string, unknown>[]} */ (sp.tableCards ?? []), [sp.tableCards])
@@ -129,8 +140,11 @@ export function SatellitePositionAnalysis() {
     if (!supabase || !runHoldingId) return
 
     setAnalysisPhase('running')
-    setAnalysisMessage('Running Gemini research and Claude scorecard synthesis...')
+    setAnalysisElapsed(0)
+    setAnalysisMessage(analysisProgressMessage(0))
 
+    /** @type {ReturnType<typeof setInterval> | null} */
+    let timer = null
     try {
       const { data, error } = await supabase.auth.getSession()
       if (error) throw error
@@ -138,23 +152,45 @@ export function SatellitePositionAnalysis() {
       const token = data.session?.access_token
       if (!token) throw new Error('Not signed in.')
 
-      const out = await postTriadAnalysis(
-        {
-          step: 'run-analysis',
-          holdingId: runHoldingId,
-        },
-        { accessToken: token },
-      )
+      const started = Date.now()
+      timer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - started) / 1000)
+        setAnalysisElapsed(elapsed)
+        setAnalysisMessage(analysisProgressMessage(elapsed))
+      }, 1000)
 
-      if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
-        throw new Error('Unexpected Triad API response.')
+      const start = await startTriadAnalysis({ holdingId: runHoldingId }, { accessToken: token })
+      const jobId = start && typeof start === 'object' ? `${Reflect.get(start, 'job_id') ?? ''}`.trim() : ''
+      if (!jobId) throw new Error('Triad job was not created.')
+
+      while (Date.now() - started < 180_000) {
+        await sleep(3000)
+        const status = await getTriadAnalysisJob(jobId, { accessToken: token })
+        const job = status && typeof status === 'object' ? Reflect.get(status, 'job') : null
+        const jobObj = job && typeof job === 'object' ? /** @type {Record<string, unknown>} */ (job) : null
+        const state = `${jobObj?.status ?? ''}`
+
+        if (state === 'complete') {
+          if (timer) clearInterval(timer)
+          timer = null
+          const result = jobObj?.result && typeof jobObj.result === 'object' ? /** @type {Record<string, unknown>} */ (jobObj.result) : {}
+          setAnalysisPhase('done')
+          setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
+          setAnalysisMessage(
+            `Analysis complete. Version ${Reflect.get(result, 'version_number') ?? '—'} created with overall score ${Reflect.get(result, 'overall_score') ?? '—'}%.`,
+          )
+          await sp.refresh?.()
+          return
+        }
+
+        if (state === 'failed') {
+          throw new Error(`${jobObj?.error ?? 'Analysis failed.'}`)
+        }
       }
 
-      setAnalysisPhase('done')
-      setAnalysisMessage(
-        `Analysis complete. Version ${Reflect.get(out, 'version_number') ?? '—'} created with overall score ${Reflect.get(out, 'overall_score') ?? '—'}%.`,
-      )
+      throw new Error('Analysis timed out after 180 seconds. Try again.')
     } catch (error) {
+      if (timer) clearInterval(timer)
       setAnalysisPhase('error')
       setAnalysisMessage(error instanceof Error ? error.message : String(error))
     }
@@ -209,13 +245,28 @@ export function SatellitePositionAnalysis() {
               {analysisPhase === 'running' ? 'Running analysis...' : 'Run analysis'}
             </button>
             {analysisMessage ? (
-              <p
-                className={`max-w-[320px] text-right font-mono text-[10px] ${
-                  analysisPhase === 'error' ? 'text-[#EF4444]' : analysisPhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'
-                }`}
-              >
-                {analysisMessage}
-              </p>
+              <div className="max-w-[360px] text-right">
+                <p
+                  className={`font-mono text-[10px] ${
+                    analysisPhase === 'error' ? 'text-[#EF4444]' : analysisPhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'
+                  }`}
+                >
+                  {analysisPhase === 'running' ? `${analysisMessage} ${analysisElapsed}s elapsed` : analysisMessage}
+                </p>
+                {analysisPhase === 'running' ? (
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1A1A24]">
+                    <div
+                      className="h-full rounded-full bg-[#4DB8FF] transition-all"
+                      style={{ width: `${Math.min(100, (analysisElapsed / 180) * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
+                {analysisPhase === 'error' ? (
+                  <button type="button" className="mt-2 font-mono text-[10px] text-[#79CBFF]" onClick={() => void runAnalysis()}>
+                    Retry
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </div>

@@ -54,3 +54,69 @@ export async function postTriadAnalysis(body, session) {
 
   return json
 }
+
+/**
+ * @param {{ holdingId: string }} body
+ * @param {{ accessToken: string }} session
+ */
+export async function startTriadAnalysis(body, session) {
+  return requestTriadJson('/api/analysis/triad-start', {
+    method: 'POST',
+    body,
+    accessToken: session.accessToken,
+  })
+}
+
+/**
+ * @param {string} jobId
+ * @param {{ accessToken: string }} session
+ */
+export async function getTriadAnalysisJob(jobId, session) {
+  return requestTriadJson(`/api/analysis/triad-status?job_id=${encodeURIComponent(jobId)}`, {
+    method: 'GET',
+    accessToken: session.accessToken,
+  })
+}
+
+/**
+ * @param {string} path
+ * @param {{ method: 'GET'|'POST', accessToken: string, body?: unknown }} opts
+ */
+async function requestTriadJson(path, opts) {
+  const secret = `${import.meta.env.VITE_ANALYSIS_API_SECRET ?? ''}`.trim()
+
+  /** @type {Record<string, string>} */
+  const headers = {
+    Authorization: `Bearer ${opts.accessToken}`,
+  }
+
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (secret) headers['x-analysis-secret'] = secret
+
+  const res = await fetch(path, {
+    method: opts.method,
+    headers,
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+  })
+  const text = await res.text()
+
+  /** @type {unknown} */
+  let json
+
+  try {
+    json = text.trim() ? JSON.parse(text) : null
+  } catch {
+    throw new Error(`Triad API returned non-JSON (${res.status})`)
+  }
+
+  if (!res.ok) {
+    const msg =
+      json && typeof json === 'object' && json !== null && 'error' in json
+        ? String(Reflect.get(json, 'error'))
+        : `HTTP ${res.status}`
+
+    throw new Error(msg)
+  }
+
+  return json
+}
