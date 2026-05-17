@@ -172,7 +172,10 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
   }, [columnOrder, columnsById, hiddenColumns])
 
   const sourceRows = useMemo(
-    () => (includeClosed ? tableCards : tableCards.filter((row) => !row.rowClosed)).filter((row) => !row.isCashLike),
+    () =>
+      tableCards
+        .filter((row) => includeClosed || row.rowClosed === false)
+        .filter((row) => !row.isCashLike),
     [includeClosed, tableCards],
   )
 

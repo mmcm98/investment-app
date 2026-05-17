@@ -548,14 +548,21 @@ export function useSatellitePortfolio() {
       const h = c.holding
       const ho = /** @type {Record<string, unknown>|null} */ (h)
 
+      const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
+      const raw = ho && Reflect.get(ho, 'raw')
+      const rawObj = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : null
+      const rawQty = rawObj ? numOrNull(Reflect.get(rawObj, 'quantity')) : null
       const rowClosed =
-        Boolean(ho && isSharesightHoldingClosed(ho)) || Boolean(pos && Reflect.get(pos, 'closed') === true)
+        qty == null ||
+        qty === 0 ||
+        Boolean(rawObj && Reflect.get(rawObj, 'closed') === true) ||
+        rawQty === 0 ||
+        Boolean(ho && isSharesightHoldingClosed(ho)) ||
+        Boolean(pos && Reflect.get(pos, 'closed') === true)
 
       const isCashLikeRow = Boolean(ho && isCashLikeHolding(ho))
 
       const { fmp: fmpSymbol, exchangeShort } = fmpDisplayAndExchange(pos, h)
-
-      const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
 
       const valueAud = ho ? sharesightPortfolioValueAud(ho) : null
 
