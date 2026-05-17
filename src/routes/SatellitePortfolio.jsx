@@ -36,7 +36,7 @@ export function SatellitePortfolio() {
   }
 
   return (
-    <div className={`mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-10 pb-24 lg:pb-10 lg:px-10 ${theme.fg}`}>
+    <div className={`mx-auto flex w-full max-w-screen-2xl flex-col gap-6 px-6 py-10 pb-24 lg:pb-10 ${theme.fg}`}>
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-semibold">Satellite portfolio</h1>

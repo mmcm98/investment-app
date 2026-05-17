@@ -4,7 +4,7 @@ import { Skeleton } from '../ui/Skeleton.jsx'
 
 export function DashboardPageSkeleton() {
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-4 pb-8 lg:px-10">
+    <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-8 px-6 pb-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1 space-y-3">
           <Skeleton className="h-7 w-[200px]" />
