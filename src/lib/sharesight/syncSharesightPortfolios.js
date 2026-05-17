@@ -10,7 +10,6 @@ import { sharesightAuthorizedFetch } from './sharesightHttp.js'
 import { getSharesightPortfolioUuids } from './runtimeEnv.js'
 import {
   normalizeHolding,
-  normalizeTrade,
   normalizePayout,
   extractCashBalancesFromCashAccountsPayload,
   parseValuationHoldingsList,
@@ -25,7 +24,6 @@ import {
 import {
   fetchSharesightOAuthRow,
   patchSharesightSyncMeta,
-  patchSharesightTradeCursor,
   upsertSharesightOAuthRow,
 } from './oauthCredentialsRepository.js'
 import { mapWithConcurrency } from './asyncPool.js'
@@ -69,7 +67,6 @@ async function finalizeSharesightSyncRun(supabase, syncRunId, patch) {
 
 /** Supabase `.upsert` conflict target aligned with Postgres unique indexes (`sharesight_*_natural_key`). */
 const UPSERT_HOLDINGS_ON = 'user_id,portfolio_role,holding_external_id'
-const UPSERT_TRADES_ON = 'user_id,portfolio_role,trade_external_id'
 const UPSERT_CASH_ON = 'user_id,portfolio_role,portfolio_external_id,account_key,currency'
 const UPSERT_PERFORMANCE_ON = 'user_id,portfolio_role,portfolio_external_id,start_date,end_date'
 const UPSERT_INCOME_ON = 'user_id,portfolio_role,holding_external_id,income_external_id'
@@ -90,104 +87,15 @@ function logSharesightRaw(label, ctx, response) {
   })
 }
 
-/** @param {unknown} value */
-function numOrNull(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim()) {
-    const n = Number.parseFloat(value.trim().replace(/,/g, ''))
-
-    return Number.isFinite(n) ? n : null
-  }
-
-  return null
-}
-
-/** @param {unknown} trade */
-function tradeSymbolKey(trade) {
-  if (!trade || typeof trade !== 'object') return ''
-
-  return normalizeSharesightSymbolKey(Reflect.get(/** @type {Record<string, unknown>} */ (trade), 'symbol'))
-}
-
-/** @param {unknown} type */
-function isBuyTradeType(type) {
-  const t = `${type ?? ''}`.trim().toUpperCase()
-
-  return t === 'BUY' || t === 'OPENING_BALANCE'
-}
-
-/** @param {unknown} type */
-function isSellTradeType(type) {
-  return `${type ?? ''}`.trim().toUpperCase() === 'SELL'
-}
-
 /**
- * Weighted-average open-cost basis from Sharesight v2 trades, keyed by symbol.
- *
- * @param {unknown[]} trades
- * @returns {Map<string, number>}
+ * @param {{ count: number }} counter
+ * @param {string} accessToken
+ * @param {string} apiPath
+ * @param {Parameters<typeof sharesightAuthorizedFetch>[2]} [opts]
  */
-function calculateCostBasisBySymbol(trades) {
-  /** @type {Map<string, { buyQty: number, buyCost: number, sellQty: number, trades: unknown[] }>} */
-  const totalsBySymbol = new Map()
-
-  for (const trade of trades) {
-    if (!trade || typeof trade !== 'object') continue
-
-    const t = /** @type {Record<string, unknown>} */ (trade)
-    const symbol = tradeSymbolKey(t)
-    if (!symbol) continue
-
-    const qty = Math.abs(numOrNull(Reflect.get(t, 'quantity')) ?? 0)
-    if (!qty) continue
-
-    const transactionType = Reflect.get(t, 'transaction_type')
-    const price = numOrNull(Reflect.get(t, 'price')) ?? 0
-    const tradeCurrency = `${Reflect.get(t, 'currency') ?? Reflect.get(t, 'currency_code') ?? ''}`.trim().toUpperCase()
-    const exchangeRate = tradeCurrency === 'AUD' ? 1 : (numOrNull(Reflect.get(t, 'exchange_rate')) ?? 1)
-    const totals = totalsBySymbol.get(symbol) ?? { buyQty: 0, buyCost: 0, sellQty: 0, trades: [] }
-
-    totals.trades.push(trade)
-
-    if (isBuyTradeType(transactionType)) {
-      totals.buyQty += qty
-      totals.buyCost += qty * price * exchangeRate
-      totalsBySymbol.set(symbol, totals)
-      continue
-    }
-
-    if (isSellTradeType(transactionType)) {
-      totals.sellQty += qty
-      totalsBySymbol.set(symbol, totals)
-    }
-  }
-
-  const out = new Map()
-
-  for (const [symbol, totals] of totalsBySymbol.entries()) {
-    if (totals.buyQty <= 0) continue
-
-    const currentQuantity = Math.max(totals.buyQty - totals.sellQty, 0)
-    const averageBuyPrice = totals.buyCost / totals.buyQty
-    const costBasis = averageBuyPrice * currentQuantity
-
-    if (symbol === 'MP1') {
-      console.info('[sharesight-sync] mp1_cost_basis_trades', {
-        symbol,
-        raw_trades: totals.trades,
-        total_bought_quantity: totals.buyQty,
-        total_sold_quantity: totals.sellQty,
-        current_quantity: currentQuantity,
-        total_buy_cost_aud: totals.buyCost,
-        average_buy_price_aud: averageBuyPrice,
-        cost_basis_aud: costBasis,
-      })
-    }
-
-    if (Number.isFinite(costBasis)) out.set(symbol, costBasis)
-  }
-
-  return out
+function countedSharesightFetch(counter, accessToken, apiPath, opts) {
+  counter.count += 1
+  return sharesightAuthorizedFetch(accessToken, apiPath, opts)
 }
 
 /** @param {unknown} portfoliosPayload */
@@ -515,28 +423,15 @@ async function upsertChunks(supabase, table, rows, onConflict, chunkSize = 250) 
  * Best-effort: pull payouts for holdings (distribution / income tracking).
  *
  * @param {SupabaseClient} supabase
+ * @param {{ count: number }} apiCounter
  * @param {string} accessToken
  * @param {{ holding_external_id: string }[]} holdings
  */
-/** @param {unknown} raw */
-function tradeExecutedAtMs(raw) {
-  if (!raw || typeof raw !== 'object') return 0
-
-  /** @type {any} */
-  const t = raw
-  const s = String(t.trade_date ?? t.transaction_date ?? t.date ?? t.trade_placed_at ?? '').trim()
-
-  if (!s) return 0
-
-  const ms = Date.parse(s)
-
-  return Number.isFinite(ms) ? ms : 0
-}
-
-async function syncIncomeForHoldings(supabase, accessToken, holdings) {
-  const incomeRowsToInsert = await mapWithConcurrency(2, holdings, async (h) => {
+async function syncIncomeForHoldings(supabase, apiCounter, accessToken, holdings) {
+  const incomeRowsToInsert = await mapWithConcurrency(6, holdings, async (h) => {
     const payoutsJson = /** @type {any} */ (
-      await sharesightAuthorizedFetch(
+      await countedSharesightFetch(
+        apiCounter,
         accessToken,
         `api/v3/holdings/${encodeURIComponent(h.holding_external_id)}/payouts`,
         { supabase },
@@ -599,12 +494,13 @@ async function deletePortfolioSnapshotRows(supabase, userId, portfolioRole, port
  * Sequential Sharesight API fetch (holdings → valuation → performance) to reduce parallel 401 pressure.
  *
  * @param {SupabaseClient} supabase
+ * @param {{ count: number }} apiCounter
  * @param {string} accessToken
  * @param {string} userId
  * @param {string} syncRunId
  * @param {PortfolioTarget} target
  */
-async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, syncRunId, target) {
+async function syncPortfolioHoldingsCashPerf(supabase, apiCounter, accessToken, userId, syncRunId, target) {
   const portfolioId = target.portfolioExternalId
 
   const portfolioRole = /** @type {'core'|'satellite'} */ (target.portfolioRole)
@@ -621,7 +517,8 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     let holdingsPayload
 
     try {
-      holdingsPayload = await sharesightAuthorizedFetch(
+      holdingsPayload = await countedSharesightFetch(
+        apiCounter,
         accessToken,
         `api/v3/portfolios/${safePortfolioPath}/holdings`,
         { supabase },
@@ -710,7 +607,8 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     let valuationPayload = null
 
     try {
-      valuationPayload = await sharesightAuthorizedFetch(
+      valuationPayload = await countedSharesightFetch(
+        apiCounter,
         accessToken,
         `api/v2/portfolios/${safePortfolioPath}/valuation.json`,
         { supabase },
@@ -738,7 +636,8 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
     let performancePayload = null
 
     try {
-      performancePayload = await sharesightAuthorizedFetch(
+      performancePayload = await countedSharesightFetch(
+        apiCounter,
         accessToken,
         `api/v2/portfolios/${safePortfolioPath}/performance.json`,
         {
@@ -770,22 +669,12 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       warnings.push(`Performance fetch failed (${portfolioRole}): ${formatErrorBestEffort(reason)}`)
     }
 
-    const tradesResult = await syncPortfolioTrades(
-      supabase,
-      accessToken,
-      userId,
-      syncRunId,
-      portfolioRole,
-      portfolioId,
-    )
-
-    if (tradesResult.warning) warnings.push(tradesResult.warning)
-
     /** @type {any} */
     let cashAccountsPayload = null
 
     try {
-      cashAccountsPayload = await sharesightAuthorizedFetch(
+      cashAccountsPayload = await countedSharesightFetch(
+        apiCounter,
         accessToken,
         `api/v2/portfolios/${safePortfolioPath}/cash_accounts.json`,
         { supabase },
@@ -858,13 +747,6 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
       const ph = (hid ? performanceById.get(hid) : undefined) ?? (symbolKey ? performanceById.get(`symbol:${symbolKey}`) : undefined)
 
       if (ph) out = applyPerformanceHoldingFillGaps(out, ph)
-
-      if (symbolKey && tradesResult.costBasisBySymbol.has(symbolKey)) {
-        out = {
-          ...out,
-          cost_basis: tradesResult.costBasisBySymbol.get(symbolKey),
-        }
-      }
 
       return out
     })
@@ -979,108 +861,7 @@ async function syncPortfolioHoldingsCashPerf(supabase, accessToken, userId, sync
 
 /**
  * @param {SupabaseClient} supabase
- * @param {string} accessToken
- * @param {string} userId
- * @param {string} syncRunId
- * @param {'core'|'satellite'} portfolioRole
- * @param {string} portfolioId
- */
-async function syncPortfolioTrades(
-  supabase,
-  accessToken,
-  userId,
-  syncRunId,
-  portfolioRole,
-  portfolioId,
-) {
-  const safePortfolioPath = encodeURIComponent(portfolioId)
-
-  try {
-    const tradesAll = []
-
-    const maxPages = 250
-
-    for (let page = 1; page <= maxPages; page += 1) {
-      /** @type {Record<string, string | number>} */
-      const searchParams = { page }
-
-      /** @type {any} */
-      const tradesPayload = /** @type {any} */ (
-        await sharesightAuthorizedFetch(accessToken, `api/v2/portfolios/${safePortfolioPath}/trades.json`, {
-          supabase,
-          searchParams,
-        })
-      )
-
-      logSharesightRaw(
-        '[sharesight-raw] trades',
-        {
-          endpoint: `api/v2/portfolios/${safePortfolioPath}/trades.json`,
-          portfolio_role: portfolioRole,
-          portfolio_external_id: portfolioId,
-          page,
-        },
-        tradesPayload,
-      )
-
-      const pageTrades = Array.isArray(tradesPayload?.trades)
-        ? tradesPayload.trades
-        : Array.isArray(tradesPayload)
-          ? tradesPayload
-          : []
-
-      if (pageTrades.length === 0) break
-
-      tradesAll.push(...pageTrades)
-    }
-
-    const tradeRows = tradesAll
-      .map((t) => {
-        const normalized = normalizeTrade(t)
-
-        if (!normalized) return null
-
-        return {
-          user_id: userId,
-          portfolio_role: portfolioRole,
-          portfolio_external_id: portfolioId,
-          trade_external_id: normalized.trade_external_id,
-          raw: normalized.raw,
-          sync_run_id: syncRunId,
-        }
-      })
-      .filter(Boolean)
-
-    const dedupedTrades = dedupeRowsBy(
-      /** @type {any[]} */ (tradeRows),
-      (r) => `${r.user_id}|${r.portfolio_role}|${r.trade_external_id}`,
-    )
-
-    await upsertChunks(supabase, 'sharesight_trades', dedupedTrades, UPSERT_TRADES_ON)
-
-    let maxTradeMs = 0
-
-    for (const t of tradesAll) {
-      maxTradeMs = Math.max(maxTradeMs, tradeExecutedAtMs(t))
-    }
-
-    if (maxTradeMs > 0) {
-      const nextCursor = new Date(maxTradeMs).toISOString()
-
-      await patchSharesightTradeCursor(supabase, portfolioRole, nextCursor)
-    }
-
-    return { warning: null, costBasisBySymbol: calculateCostBasisBySymbol(tradesAll) }
-  } catch (error) {
-    return {
-      warning: /** @type {string} */ (`Trades import failed (${portfolioRole}): ${formatErrorBestEffort(error)}`),
-      costBasisBySymbol: new Map(),
-    }
-  }
-}
-
-/**
- * @param {SupabaseClient} supabase
+ * @param {{ count: number }} apiCounter
  * @param {string} accessToken
  * @param {string} userId
  * @param {string} syncRunId
@@ -1091,6 +872,7 @@ async function syncPortfolioTrades(
 
 async function syncPortfolioIncome(
   supabase,
+  apiCounter,
   accessToken,
   userId,
   syncRunId,
@@ -1099,7 +881,7 @@ async function syncPortfolioIncome(
   portfolioHoldingKeys,
 ) {
   try {
-    const incomePairs = await syncIncomeForHoldings(supabase, accessToken, portfolioHoldingKeys)
+    const incomePairs = await syncIncomeForHoldings(supabase, apiCounter, accessToken, portfolioHoldingKeys)
 
     const incomeRows = incomePairs
       .map((pair) =>
@@ -1141,6 +923,7 @@ async function syncPortfolioIncome(
 
 export async function syncSharesightPortfolios(supabase, args) {
   const attemptAt = new Date().toISOString()
+  const apiCounter = { count: 0 }
 
   const { data: userData, error: userErr } = await supabase.auth.getUser()
   if (userErr) throw userErr
@@ -1175,7 +958,7 @@ export async function syncSharesightPortfolios(supabase, args) {
   let portfoliosPayload = null
 
   try {
-    portfoliosPayload = await sharesightAuthorizedFetch(accessToken, 'api/v2/portfolios.json', { supabase })
+    portfoliosPayload = await countedSharesightFetch(apiCounter, accessToken, 'api/v2/portfolios.json', { supabase })
 
     logSharesightRaw('[sharesight-raw] portfolios', { endpoint: 'api/v2/portfolios.json' }, portfoliosPayload)
   } catch (error) {
@@ -1228,21 +1011,18 @@ export async function syncSharesightPortfolios(supabase, args) {
 
     report('Syncing holdings (core, then satellite)…')
 
-    /** Core then satellite — sequential to reduce parallel 401 pressure. */
-
-    const phase1 = []
-
-    for (const target of targets) {
-      const pr = await syncPortfolioHoldingsCashPerf(
+    const phase1 = await Promise.all(
+      targets.map((target) =>
+        syncPortfolioHoldingsCashPerf(
         supabase,
+          apiCounter,
         /** @type {string} */ (accessToken),
         userId,
         syncRunId,
         target,
-      )
-
-      phase1.push(pr)
-    }
+        ),
+      ),
+    )
 
     for (const p of phase1) partialWarnings.push(...p.warnings)
 
@@ -1254,6 +1034,7 @@ export async function syncSharesightPortfolios(supabase, args) {
       for (const prt of phase1) {
         const iw = await syncPortfolioIncome(
           supabase,
+          apiCounter,
           /** @type {string} */ (accessToken),
           userId,
           syncRunId,
@@ -1309,6 +1090,10 @@ export async function syncSharesightPortfolios(supabase, args) {
     })
 
     report('Complete')
+    console.info('[sharesight-sync] api_call_count', {
+      syncRunId,
+      apiCalls: apiCounter.count,
+    })
 
     finalizedThisSyncRun = true
 
@@ -1319,6 +1104,12 @@ export async function syncSharesightPortfolios(supabase, args) {
     }
   } catch (error) {
     const message = formatErrorBestEffort(error)
+
+    console.info('[sharesight-sync] api_call_count', {
+      syncRunId,
+      apiCalls: apiCounter.count,
+      status: 'error',
+    })
 
     if (error instanceof SharesightSuspendedError && !finalizedThisSyncRun) {
       await patchSharesightSyncMeta(supabase, {

@@ -444,7 +444,26 @@ export function indexValuationHoldingsByInstrumentCode(valuation) {
  * @param {Record<string, unknown>} o
  */
 export function pickSharesightCostBasisFromHoldingLike(o) {
-  void o
+  const qty = pickSharesightQuantityFromRaw(o)
+  const direct = coerceNumber(
+    Reflect.get(o, 'cost_basis') ??
+      Reflect.get(o, 'total_cost') ??
+      Reflect.get(o, 'cost_value') ??
+      Reflect.get(o, 'cost') ??
+      Reflect.get(o, 'book_cost') ??
+      Reflect.get(o, 'opening_balance'),
+  )
+
+  if (direct != null) return direct
+
+  const purchasePrice = coerceNumber(Reflect.get(o, 'purchase_price'))
+
+  if (purchasePrice != null && qty != null && qty !== 0) {
+    const total = purchasePrice * qty
+
+    if (Number.isFinite(total)) return total
+  }
+
   return null
 }
 
@@ -506,6 +525,15 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
       Reflect.get(v, 'close_value') ??
       Reflect.get(v, 'value'),
   )
+  const cost = pickSharesightCostBasisFromHoldingLike(v)
+  const capitalGain = coerceNumber(Reflect.get(v, 'capital_gain') ?? Reflect.get(v, 'gain_loss'))
+  const payoutGain = coerceNumber(Reflect.get(v, 'payout_gain') ?? Reflect.get(v, 'income_gain') ?? Reflect.get(v, 'income'))
+  const currencyGain = coerceNumber(Reflect.get(v, 'currency_gain'))
+  const totalGain =
+    coerceNumber(Reflect.get(v, 'total_gain') ?? Reflect.get(v, 'gain_loss')) ??
+    (capitalGain != null && payoutGain != null ? capitalGain + payoutGain : capitalGain)
+  const capitalGainPercent = coerceNumber(Reflect.get(v, 'capital_gain_percent') ?? Reflect.get(v, 'gain_loss_percent'))
+  const totalGainPercent = coerceNumber(Reflect.get(v, 'total_gain_percent'))
   const currency = coerceString(
     Reflect.get(v, 'instrument_currency') ??
       Reflect.get(v, 'currency_code') ??
@@ -533,6 +561,14 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     symbol: Reflect.get(v, 'symbol'),
     quantity: Reflect.get(v, 'quantity'),
     value: Reflect.get(v, 'value'),
+    cost_basis: Reflect.get(v, 'cost_basis'),
+    purchase_price: Reflect.get(v, 'purchase_price'),
+    total_cost: Reflect.get(v, 'total_cost'),
+    capital_gain: Reflect.get(v, 'capital_gain'),
+    gain_loss: Reflect.get(v, 'gain_loss'),
+    payout_gain: Reflect.get(v, 'payout_gain'),
+    currency_gain: Reflect.get(v, 'currency_gain'),
+    total_gain: Reflect.get(v, 'total_gain'),
   }
 
   const prevQty = coerceNumber(Reflect.get(row, 'quantity'))
@@ -545,6 +581,13 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     quantity: qty != null ? qty : prevQty,
     market_value: marketVal != null ? marketVal : prevMv,
     holding_value_aud: hvOut,
+    cost_basis: cost != null ? cost : Reflect.get(row, 'cost_basis'),
+    unrealized_gain_loss: capitalGain != null ? capitalGain : Reflect.get(row, 'unrealized_gain_loss'),
+    payout_gain: payoutGain != null ? payoutGain : Reflect.get(row, 'payout_gain'),
+    currency_gain: currencyGain != null ? currencyGain : Reflect.get(row, 'currency_gain'),
+    total_gain: totalGain != null ? totalGain : Reflect.get(row, 'total_gain'),
+    capital_gain_percent: capitalGainPercent != null ? capitalGainPercent : Reflect.get(row, 'capital_gain_percent'),
+    total_gain_percent: totalGainPercent != null ? totalGainPercent : Reflect.get(row, 'total_gain_percent'),
     currency: currency || `${Reflect.get(row, 'currency') ?? ''}`,
     raw: rawBase,
   }
