@@ -152,6 +152,13 @@ async function runGemini(req: Request, jobId: string, holdingIdFromBody: string)
 }
 
 Deno.serve(async (req) => {
+  console.log('[run-gemini-research] env check:', {
+    hasGeminiKey: !!Deno.env.get('GEMINI_API_KEY'),
+    hasAnthropicKey: !!Deno.env.get('ANTHROPIC_API_KEY'),
+    hasSupabaseUrl: !!Deno.env.get('SUPABASE_URL'),
+    hasServiceKey: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+  })
+
   try {
     const body = await req.json()
     const jobId = text(body.job_id)
