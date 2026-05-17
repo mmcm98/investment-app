@@ -1,5 +1,4 @@
 ﻿import { useMemo } from 'react'
-import { AddTickerCombobox } from '../components/satellite/AddTickerCombobox.jsx'
 import { SatellitePositionsTable } from '../components/satellite/SatellitePositionsTable.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
 import { useDashboardData } from '../hooks/useDashboardData.js'
@@ -89,10 +88,11 @@ export function SatellitePortfolio() {
         </div>
       ) : null}
 
-      <AddTickerCombobox onCreated={() => void sp.refresh()} />
-
       {sp.satelliteHydrated && sp.tableCards && sp.tableCards.length > 0 ? (
-        <SatellitePositionsTable tableCards={/** @type {Record<string, unknown>[]} */ (sp.tableCards ?? [])} />
+        <SatellitePositionsTable
+          tableCards={/** @type {Record<string, unknown>[]} */ (sp.tableCards ?? [])}
+          onTypeChange={sp.savePositionType}
+        />
       ) : null}
 
       {sp.satelliteHydrated && (!sp.tableCards || sp.tableCards.length === 0) ? (

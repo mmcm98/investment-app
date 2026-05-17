@@ -461,8 +461,14 @@ export function useSatellitePortfolio() {
       const valueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
 
       const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
+      const payoutGainAud = ho ? numOrNull(Reflect.get(ho, 'payout_gain')) : null
+      const totalGainAud = ho ? numOrNull(Reflect.get(ho, 'total_gain')) : null
       const capitalGainPercent = ho ? numOrNull(Reflect.get(ho, 'capital_gain_percent')) : null
       const totalGainPercent = ho ? numOrNull(Reflect.get(ho, 'total_gain_percent')) : null
+      const incomePct =
+        cost != null && cost !== 0 && payoutGainAud != null && Number.isFinite(payoutGainAud)
+          ? (payoutGainAud / cost) * 100
+          : null
 
       const capitalGainAud =
         capitalGainHo ??
@@ -494,6 +500,9 @@ export function useSatellitePortfolio() {
         costBasis: cost,
         valueAud,
         capitalGainAud,
+        payoutGainAud,
+        incomePct,
+        totalGainAud,
         returnPct: capitalGainPercent,
         totalReturnPct: totalGainPercent,
         avgBuyNative,
@@ -570,6 +579,43 @@ export function useSatellitePortfolio() {
     [supabase, reload],
   )
 
+  const savePositionType = useCallback(
+    async (positionId, nextType) => {
+      if (!supabase || !positionId) return
+
+      const { data: ud } = await supabase.auth.getUser()
+      const uid = ud.user?.id
+      if (!uid) return
+
+      const current = positions.find((p) => `${Reflect.get(p, 'id')}` === `${positionId}`)
+      const prevExtra =
+        current && Reflect.get(current, 'extra') && typeof Reflect.get(current, 'extra') === 'object'
+          ? { .../** @type {Record<string, unknown>} */ (Reflect.get(current, 'extra')) }
+          : {}
+      const next = `${nextType ?? ''}`.trim()
+
+      if (next) prevExtra.asset_class = next
+      else delete prevExtra.asset_class
+
+      const { error } = await supabase
+        .from('positions')
+        .update({ extra: prevExtra, updated_at: new Date().toISOString() })
+        .eq('id', positionId)
+        .eq('user_id', uid)
+
+      if (error) throw error
+
+      setPositions((rows) =>
+        rows.map((row) =>
+          `${Reflect.get(row, 'id')}` === `${positionId}`
+            ? { ...row, extra: prevExtra }
+            : row,
+        ),
+      )
+    },
+    [positions, supabase],
+  )
+
   const hasRecoverableSatelliteData = positions.length > 0 || holdings.length > 0
 
   return {
@@ -589,5 +635,6 @@ export function useSatellitePortfolio() {
     totalMv: portfolio.totalMv,
     refresh: reload,
     saveAllocationOverride,
+    savePositionType,
   }
 }
