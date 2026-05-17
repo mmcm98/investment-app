@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useSharesightIntegration } from '../../context/SharesightIntegrationContext.jsx'
 
@@ -59,6 +59,35 @@ function rowExtra(row) {
   const extra = pos && typeof pos === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (pos), 'extra') : null
 
   return extra && typeof extra === 'object' ? { .../** @type {Record<string, unknown>} */ (extra) } : {}
+}
+
+/** @param {Record<string, unknown>} row */
+function exchangeLabelForRow(row) {
+  return `${row.exchangeShort || row.exchangeGroup || 'Other'}`.trim() || 'Other'
+}
+
+/** @param {Record<string, unknown>[]} rows */
+function groupRowsByExchange(rows) {
+  /** @type {Array<{ exchange: string, rows: Record<string, unknown>[], valueAud: number }>} */
+  const groups = []
+  /** @type {Map<string, { exchange: string, rows: Record<string, unknown>[], valueAud: number }>} */
+  const byExchange = new Map()
+
+  for (const row of rows) {
+    const exchange = exchangeLabelForRow(row)
+    let group = byExchange.get(exchange)
+
+    if (!group) {
+      group = { exchange, rows: [], valueAud: 0 }
+      byExchange.set(exchange, group)
+      groups.push(group)
+    }
+
+    group.rows.push(row)
+    group.valueAud += numFin(row.valueAud) ?? 0
+  }
+
+  return groups
 }
 
 const STORAGE_COLUMNS = 'satellitePositionsTable.columnOrder.v2'
@@ -171,6 +200,8 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
     })
   }, [rowOrder, sourceRows])
 
+  const exchangeGroups = useMemo(() => groupRowsByExchange(visibleRows), [visibleRows])
+
   const persistRowOrder = useCallback(
     async (nextOrder) => {
       if (!supabase) return
@@ -264,7 +295,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
             </div>
           )
         case 'exchange':
-          return `${row.exchangeShort || row.exchangeGroup || '—'}`.trim() || '—'
+          return exchangeLabelForRow(row)
         case 'company':
           return <span className="line-clamp-2 min-w-[180px]">{`${row.displayName ?? '—'}`}</span>
         case 'type':
@@ -373,51 +404,82 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
                 </td>
               </tr>
             ) : null}
-            {visibleRows.map((row) => {
-              const rowKey = `${row.rowKey}`
-              const closed = Boolean(row.rowClosed)
+            {exchangeGroups.map((group) => (
+              <Fragment key={group.exchange}>
+                <tr className="border-b border-[rgba(255,255,255,0.08)] bg-[#0A0A0F]">
+                  <td colSpan={visibleColumns.length} className="px-3 py-2">
+                    <div className="flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-[#9090A8]">
+                      <span>{group.exchange}</span>
+                      <span className="text-[#505068]">↑↓</span>
+                    </div>
+                  </td>
+                </tr>
 
-              return (
-                <tr
-                  key={rowKey}
-                  draggable
-                  onDragStart={() => setDragRowKey(rowKey)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => {
-                    moveRow(dragRowKey, rowKey)
-                    setDragRowKey(null)
-                  }}
-                  className={`border-b border-[rgba(255,255,255,0.04)] transition-colors hover:bg-[#22222F] ${
-                    closed ? 'opacity-60' : ''
-                  }`}
-                >
-                  {visibleColumns.map((col) => {
-                    const isNumber = col.align === 'right'
-                    const isReturn = col.id === 'totalReturn'
-                    const totalReturn = numFin(row.totalGainAud)
+                {group.rows.map((row) => {
+                  const rowKey = `${row.rowKey}`
+                  const closed = Boolean(row.rowClosed)
+
+                  return (
+                    <tr
+                      key={rowKey}
+                      draggable
+                      onDragStart={() => setDragRowKey(rowKey)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        moveRow(dragRowKey, rowKey)
+                        setDragRowKey(null)
+                      }}
+                      className={`border-b border-[rgba(255,255,255,0.04)] transition-colors hover:bg-[#22222F] ${
+                        closed ? 'opacity-60' : ''
+                      }`}
+                    >
+                      {visibleColumns.map((col) => {
+                        const isNumber = col.align === 'right'
+                        const isReturn = col.id === 'totalReturn'
+                        const totalReturn = numFin(row.totalGainAud)
+
+                        return (
+                          <td
+                            key={`${rowKey}:${col.id}`}
+                            className={`px-3 py-2 align-middle text-xs ${
+                              isNumber ? 'text-right font-mono' : ''
+                            } ${
+                              isReturn && totalReturn != null
+                                ? totalReturn >= 0
+                                  ? 'text-[#22C55E]'
+                                  : 'text-[#EF4444]'
+                                : isNumber
+                                  ? 'text-[#C8C8D8]'
+                                  : 'text-[#F0F0F8]'
+                            }`}
+                          >
+                            {renderCell(row, col.id)}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+
+                <tr className="border-b border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)]">
+                  {visibleColumns.map((col, index) => {
+                    const isValueColumn = col.id === 'valueAud'
+                    const isFirstColumn = index === 0
 
                     return (
                       <td
-                        key={`${rowKey}:${col.id}`}
-                        className={`px-3 py-2 align-middle text-xs ${
-                          isNumber ? 'text-right font-mono' : ''
-                        } ${
-                          isReturn && totalReturn != null
-                            ? totalReturn >= 0
-                              ? 'text-[#22C55E]'
-                              : 'text-[#EF4444]'
-                            : isNumber
-                              ? 'text-[#C8C8D8]'
-                              : 'text-[#F0F0F8]'
-                        }`}
+                        key={`${group.exchange}:subtotal:${col.id}`}
+                        className={`px-3 py-2 align-middle font-mono text-[11px] ${
+                          col.align === 'right' ? 'text-right' : ''
+                        } ${isValueColumn ? 'text-[#F0F0F8]' : 'text-[#505068]'}`}
                       >
-                        {renderCell(row, col.id)}
+                        {isValueColumn ? fmtAud(group.valueAud) : isFirstColumn ? `${group.exchange} subtotal` : ''}
                       </td>
                     )
                   })}
                 </tr>
-              )
-            })}
+              </Fragment>
+            ))}
           </tbody>
         </table>
       </div>
