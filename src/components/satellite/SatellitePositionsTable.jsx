@@ -61,6 +61,11 @@ function rowExtra(row) {
   return extra && typeof extra === 'object' ? { .../** @type {Record<string, unknown>} */ (extra) } : {}
 }
 
+/** @param {{ target: EventTarget | null }} event */
+function isNoDragEvent(event) {
+  return event.target instanceof Element && Boolean(event.target.closest('[data-no-drag="true"]'))
+}
+
 /** @param {Record<string, unknown>} row */
 function exchangeLabelForRow(row) {
   return `${row.exchange ?? '—'}`.trim() || '—'
@@ -142,8 +147,17 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
   const [rowOrder, setRowOrder] = useState(/** @type {string[]} */ ([]))
   const [dragRowKey, setDragRowKey] = useState(/** @type {string|null} */ (null))
   const [dragColumnId, setDragColumnId] = useState(/** @type {string|null} */ (null))
+  const [openTypeRow, setOpenTypeRow] = useState(/** @type {string|null} */ (null))
   const [columnOrder, setColumnOrder] = useState(() => loadStringArray(STORAGE_COLUMNS, DEFAULT_COLUMN_IDS))
   const [hiddenColumns, setHiddenColumns] = useState(() => new Set(loadStringArray(STORAGE_HIDDEN, [])))
+
+  useEffect(() => {
+    const closeMenu = () => setOpenTypeRow(null)
+
+    document.addEventListener('click', closeMenu)
+
+    return () => document.removeEventListener('click', closeMenu)
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_COLUMNS, JSON.stringify(columnOrder))
@@ -291,6 +305,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       const cur = `${row.quoteCurrency ?? ''}`.trim()
       const pid = row.positionId ? `${row.positionId}` : ''
       const currentType = `${row.assetClass ?? ''}`.trim()
+      const rowKey = `${row.rowKey ?? ''}`
 
       switch (columnId) {
         case 'ticker':
@@ -310,23 +325,52 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
           return <span className="line-clamp-2 min-w-[180px]">{`${row.displayName ?? '—'}`}</span>
         case 'type':
           return (
-            <select
-              value={TYPE_OPTIONS.includes(currentType) ? currentType : ''}
-              disabled={!pid}
+            <div
+              data-no-drag="true"
+              className="relative min-w-[150px] pointer-events-auto"
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                e.stopPropagation()
-                if (pid) void onTypeChange?.(pid, e.target.value)
-              }}
-              className="min-w-[130px] rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 text-xs text-[#F0F0F8] disabled:opacity-50"
             >
-              <option value="">—</option>
-              {TYPE_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+              <button
+                type="button"
+                disabled={!pid}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  if (pid) setOpenTypeRow((current) => (current === rowKey ? null : rowKey))
+                }}
+                className="flex w-full items-center justify-between gap-2 rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 text-left text-xs text-[#F0F0F8] disabled:opacity-50"
+              >
+                <span className="truncate">{TYPE_OPTIONS.includes(currentType) ? currentType : '—'}</span>
+                <span className="text-[#505068]">▾</span>
+              </button>
+              {openTypeRow === rowKey ? (
+                <div
+                  className="absolute left-0 top-[calc(100%+4px)] z-50 w-48 overflow-hidden rounded-lg border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] shadow-xl"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {['', ...TYPE_OPTIONS].map((opt) => (
+                    <button
+                      key={opt || '__blank'}
+                      type="button"
+                      className={`block w-full px-3 py-2 text-left text-xs hover:bg-[#22222F] ${
+                        opt === currentType || (!opt && !TYPE_OPTIONS.includes(currentType))
+                          ? 'text-[#4DB8FF]'
+                          : 'text-[#F0F0F8]'
+                      }`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (pid) void onTypeChange?.(pid, opt)
+                        setOpenTypeRow(null)
+                      }}
+                    >
+                      {opt || '—'}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           )
         case 'tier':
           return tierLabel(row.tier)
@@ -352,7 +396,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
           return '—'
       }
     },
-    [onTypeChange],
+    [onTypeChange, openTypeRow],
   )
 
   return (
@@ -435,7 +479,15 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
                     <tr
                       key={rowKey}
                       draggable
-                      onDragStart={() => setDragRowKey(rowKey)}
+                      onDragStart={(e) => {
+                        if (isNoDragEvent(e)) {
+                          e.preventDefault()
+                          setDragRowKey(null)
+                          return
+                        }
+
+                        setDragRowKey(rowKey)
+                      }}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={() => {
                         moveRow(dragRowKey, rowKey)
@@ -449,13 +501,15 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
                         const isNumber = col.align === 'right'
                         const isReturn = col.id === 'totalReturn'
                         const totalReturn = numFin(row.totalGainAud)
+                        const isTypeCell = col.id === 'type'
 
                         return (
                           <td
                             key={`${rowKey}:${col.id}`}
+                            data-no-drag={isTypeCell ? 'true' : undefined}
                             className={`px-3 py-2 align-middle text-xs ${
                               isNumber ? 'text-right font-mono' : ''
-                            } ${
+                            } ${isTypeCell ? 'relative pointer-events-auto' : ''} ${
                               isReturn && totalReturn != null
                                 ? totalReturn >= 0
                                   ? 'text-[#22C55E]'
