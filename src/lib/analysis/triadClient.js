@@ -73,10 +73,12 @@ export async function startTriadAnalysis(body, session) {
  * @param {{ accessToken: string }} session
  */
 export async function getTriadAnalysisJob(jobId, session) {
-  return requestTriadJson(`/api/analysis/triad-status?job_id=${encodeURIComponent(jobId)}`, {
+  const status = await requestTriadJson(`/api/analysis/triad-status?job_id=${encodeURIComponent(jobId)}`, {
     method: 'GET',
     accessToken: session.accessToken,
   })
+  console.log('[triad-status] result:', JSON.stringify(status))
+  return status
 }
 
 /**

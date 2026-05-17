@@ -173,7 +173,14 @@ export function SatellitePositionAnalysis() {
 
       while (Date.now() - started < 180_000) {
         await sleep(3000)
-        const status = await getTriadAnalysisJob(job_id, { accessToken: token })
+        let status
+        try {
+          status = await getTriadAnalysisJob(job_id, { accessToken: token })
+          console.log('[poll-result]', JSON.stringify(status))
+        } catch (pollErr) {
+          console.log('[poll-error]', typeof pollErr, pollErr?.message, pollErr)
+          throw pollErr
+        }
         const job = status && typeof status === 'object' ? Reflect.get(status, 'job') : null
         const jobObj = job && typeof job === 'object' ? /** @type {Record<string, unknown>} */ (job) : null
         const state = `${jobObj?.status ?? ''}`
