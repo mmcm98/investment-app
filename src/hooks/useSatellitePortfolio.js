@@ -122,15 +122,15 @@ function exchangeGroupForRow(pos, h) {
  */
 function fmpDisplayAndExchange(pos, h) {
   const ho = /** @type {Record<string, unknown>|null} */ (h)
+  const inst = ho ? `${Reflect.get(ho, 'instrument_symbol') ?? ''}`.trim() : ''
+  const inferredExchange = /^ASX:/i.test(inst) ? 'ASX' : /^LSE:/i.test(inst) ? 'LSE' : ''
 
   if (pos) {
     return {
       fmp: `${Reflect.get(pos, 'fmp_symbol') ?? ''}`.trim(),
-      exchangeShort: `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim(),
+      exchangeShort: `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim() || inferredExchange || '—',
     }
   }
-
-  const inst = ho ? `${Reflect.get(ho, 'instrument_symbol') ?? ''}`.trim() : ''
 
   const m = inst.match(/^ASX:\s*(.+)$/i)
 
@@ -140,7 +140,7 @@ function fmpDisplayAndExchange(pos, h) {
 
   if (m2) return { fmp: `${m2[1] ?? ''}`.trim(), exchangeShort: 'LSE' }
 
-  return { fmp: inst.replace(/^=/, ''), exchangeShort: '' }
+  return { fmp: inst.replace(/^=/, ''), exchangeShort: inferredExchange || '—' }
 }
 
 export function useSatellitePortfolio() {

@@ -284,7 +284,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
             </div>
           )
         case 'exch':
-          return `${row.exchangeShort ?? row.exchangeGroup ?? '—'}`.trim() || '—'
+          return `${row.exchangeShort || row.exchangeGroup || '—'}`.trim() || '—'
         case 'company':
           return <span className="line-clamp-2 min-w-[180px]">{`${row.displayName ?? '—'}`}</span>
         case 'type':
