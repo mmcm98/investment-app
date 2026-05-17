@@ -130,6 +130,40 @@ function exchangeGroupForRow(pos, h) {
   return 'Other'
 }
 
+const SHARESIGHT_MARKET_LABELS = {
+  ASX: 'ASX',
+  NZX: 'NZX',
+  NYSE: 'NYSE',
+  NASDAQ: 'NASDAQ',
+  LSE: 'LSE',
+  EURONEXT: 'Euronext',
+  TSE: 'TSE',
+  CVE: 'TSX-V',
+  CNSX: 'CNSX',
+  HKG: 'HKEX',
+  SGX: 'SGX',
+  JSE: 'JSE',
+  FRA: 'FSE',
+  XETR: 'Xetra',
+  SWX: 'SIX',
+  TYO: 'TSE',
+  BIT: 'BIT',
+  BME: 'BME',
+  STO: 'OMX',
+  OSL: 'OSL',
+  AMEX: 'AMEX',
+  BVMF: 'B3',
+  KRX: 'KRX',
+  TAI: 'TWSE',
+  FundAU: 'AU Fund',
+  FundNZ: 'NZ Fund',
+  FundUK: 'UK Fund',
+  FundUS: 'US Fund',
+  FundCA: 'CA Fund',
+  mFund: 'mFund',
+  OTHER: 'Other',
+}
+
 /** @param {Record<string, unknown>|null|undefined} h */
 function valuationSnapshot(h) {
   const raw = h && Reflect.get(h, 'raw')
@@ -139,6 +173,37 @@ function valuationSnapshot(h) {
   const valuation = Reflect.get(/** @type {Record<string, unknown>} */ (raw), 'sharesight_valuation_holding')
 
   return valuation && typeof valuation === 'object' ? /** @type {Record<string, unknown>} */ (valuation) : null
+}
+
+/** @param {unknown} marketCode */
+function sharesightMarketDisplayLabel(marketCode) {
+  const code = `${marketCode ?? ''}`.trim()
+
+  if (!code) return ''
+
+  const exact = SHARESIGHT_MARKET_LABELS[/** @type {keyof typeof SHARESIGHT_MARKET_LABELS} */ (code)]
+  if (exact) return exact
+
+  const upper = code.toUpperCase()
+
+  return SHARESIGHT_MARKET_LABELS[/** @type {keyof typeof SHARESIGHT_MARKET_LABELS} */ (upper)] ?? code
+}
+
+/** @param {Record<string, unknown>|null|undefined} h */
+function sharesightMarketCodeDisplay(h) {
+  const raw = h && Reflect.get(h, 'raw')
+  const rawObj = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : null
+  const instrument = rawObj && Reflect.get(rawObj, 'instrument')
+  const instrumentObj = instrument && typeof instrument === 'object' ? /** @type {Record<string, unknown>} */ (instrument) : null
+  const valuation = valuationSnapshot(h)
+
+  return (
+    sharesightMarketDisplayLabel(
+      (rawObj ? Reflect.get(rawObj, 'market_code') : null) ??
+        (instrumentObj ? Reflect.get(instrumentObj, 'market_code') : null) ??
+        (valuation ? Reflect.get(valuation, 'market_code') : null),
+    ) || '—'
+  )
 }
 
 /** @param {Record<string, unknown>|null|undefined} h */
@@ -545,7 +610,7 @@ export function useSatellitePortfolio() {
       const fmpProfileSymbol = fmpInstrumentSymbol(fmpSymbol, exchangeShort)
 
       const exchangeGroup = exchangeGroupForRow(pos, h)
-      const exchange = (pos && `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim()) || '—'
+      const exchange = sharesightMarketCodeDisplay(ho)
 
       return {
         ...c,
