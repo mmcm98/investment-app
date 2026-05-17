@@ -60,11 +60,12 @@ export async function postTriadAnalysis(body, session) {
  * @param {{ accessToken: string }} session
  */
 export async function startTriadAnalysis(body, session) {
-  return requestTriadJson('/api/analysis/triad-start', {
+  const data = await requestTriadJson('/api/analysis/triad-start', {
     method: 'POST',
     body,
     accessToken: session.accessToken,
   })
+  return { ok: true, job_id: data && typeof data === 'object' ? Reflect.get(data, 'job_id') : undefined }
 }
 
 /**

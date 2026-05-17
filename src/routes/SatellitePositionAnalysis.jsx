@@ -168,12 +168,12 @@ export function SatellitePositionAnalysis() {
 
       const start = await startTriadAnalysis({ holdingId: runHoldingId }, { accessToken: token })
       console.log('[triad-start-response] ok:', start?.ok, 'status:', start?.status)
-      const jobId = start && typeof start === 'object' ? `${Reflect.get(start, 'job_id') ?? ''}`.trim() : ''
-      if (!jobId) throw new Error('Triad job was not created.')
+      const { job_id } = start
+      if (!job_id) throw new Error('No job_id returned from triad-start')
 
       while (Date.now() - started < 180_000) {
         await sleep(3000)
-        const status = await getTriadAnalysisJob(jobId, { accessToken: token })
+        const status = await getTriadAnalysisJob(job_id, { accessToken: token })
         const job = status && typeof status === 'object' ? Reflect.get(status, 'job') : null
         const jobObj = job && typeof job === 'object' ? /** @type {Record<string, unknown>} */ (job) : null
         const state = `${jobObj?.status ?? ''}`
@@ -204,7 +204,7 @@ export function SatellitePositionAnalysis() {
     } catch (error) {
       if (timer) clearInterval(timer)
       setAnalysisPhase('error')
-      const errorValue = error?.message || error?.error || String(error) || 'Unknown error'
+      const errorValue = error?.message || String(error) || 'Unknown error'
       console.log('[analysis-error]', typeof errorValue, errorValue)
       setAnalysisMessage(errorValue)
     }
