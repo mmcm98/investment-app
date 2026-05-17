@@ -846,11 +846,12 @@ export function LivePricesProvider({ children }) {
   const value = useMemo(
     () => ({
       mergedRows,
+      fxByCurrency,
       pricesUpdating,
       quoteError,
       refreshMarketData,
     }),
-    [mergedRows, pricesUpdating, quoteError, refreshMarketData],
+    [mergedRows, fxByCurrency, pricesUpdating, quoteError, refreshMarketData],
   )
 
   return <LivePricesContext.Provider value={value}>{children}</LivePricesContext.Provider>

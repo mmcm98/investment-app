@@ -33,6 +33,20 @@ export function satelliteHoldingsMvTotal(holdings) {
   return t
 }
 
+/** @param {unknown} value @param {unknown} currency @param {Record<string, { aud_per_unit?: number }>} fxByCurrency */
+function nativeValueToAud(value, currency, fxByCurrency) {
+  const native = numOrNull(value)
+  if (native == null) return null
+
+  const cur = `${currency ?? ''}`.trim().toUpperCase()
+  if (!cur) return null
+  if (cur === 'AUD') return native
+
+  const rate = fxByCurrency[cur]?.aud_per_unit
+
+  return typeof rate === 'number' && Number.isFinite(rate) ? native * rate : null
+}
+
 /** @param {unknown[]} scores */
 export function collapseLatestScorecardsByPosition(scores) {
   /** @type {Record<string, Record<string, unknown>>} */
@@ -167,7 +181,7 @@ function fmpDisplayAndExchange(pos, h) {
 
 export function useSatellitePortfolio() {
   const { supabase, userPresent, holdingsCount } = useSharesightIntegration()
-  const { mergedRows } = useLivePrices()
+  const { mergedRows, fxByCurrency } = useLivePrices()
 
   const [holdings, setHoldings] = useState(/** @type {Record<string, unknown>[]} */ ([]))
   const [positions, setPositions] = useState(/** @type {Record<string, unknown>[]} */ ([]))
@@ -478,7 +492,12 @@ export function useSatellitePortfolio() {
 
       const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
 
-      const valueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
+      const sharesightValueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
+      const nativeHoldingValue = ho ? Reflect.get(ho, 'market_value') : null
+      const nativeCurrency = ho ? Reflect.get(ho, 'currency') : null
+      const valueAud =
+        sharesightValueAud ??
+        nativeValueToAud(nativeHoldingValue, nativeCurrency, /** @type {Record<string, { aud_per_unit?: number }>} */ (fxByCurrency))
 
       const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
       const cost = valueAud != null && capitalGainHo != null ? valueAud - capitalGainHo : null
@@ -531,7 +550,7 @@ export function useSatellitePortfolio() {
     const cards = tableCards.filter((c) => !c.rowClosed && !c.isCashLike)
 
     return { cards, tableCards, targetsByPositionId, sumOverrides, remainderValid, totalMv }
-  }, [holdings, positions, latestScores, mergedRows, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
+  }, [holdings, positions, latestScores, mergedRows, fxByCurrency, totalMv, overrideByPid, showAudPar, allocRuleOpts, tierOpts])
 
   const setPrefShowAud = useCallback(
     async (v) => {

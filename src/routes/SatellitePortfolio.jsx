@@ -1,6 +1,10 @@
-﻿import { SatellitePositionsTable } from '../components/satellite/SatellitePositionsTable.jsx'
+﻿import { useMemo } from 'react'
+import { SatellitePositionsTable } from '../components/satellite/SatellitePositionsTable.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
+import { useDashboardData } from '../hooks/useDashboardData.js'
 import { useInvTheme } from '../context/InvThemeContext.jsx'
+import { mergeUserPreferences } from '../lib/settings/mergeUserPreferences.js'
+import { SleevePortfolioDashboard } from '../components/portfolio/SleevePortfolioDashboard.jsx'
 import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
 import { Skeleton } from '../components/ui/Skeleton.jsx'
 
@@ -12,7 +16,17 @@ function fmtPct(n) {
 export function SatellitePortfolio() {
   const sp = useSatellitePortfolio()
 
+  const dash = useDashboardData()
+
   const theme = useInvTheme()
+
+  const benchSymbol = useMemo(() => {
+    const p = mergeUserPreferences(dash.settingsRow?.preferences)
+
+    const s = p.benchmarks?.default_symbol
+
+    return typeof s === 'string' && s.trim() ? s.trim() : 'VGS.AX'
+  }, [dash.settingsRow?.preferences])
 
   async function onToggleAud(e) {
     await sp.setPrefShowAud(e.target.checked)
@@ -61,6 +75,13 @@ export function SatellitePortfolio() {
           remaining budget cannot be computed.
         </div>
       ) : null}
+
+      <SleevePortfolioDashboard
+        portfolioRole="satellite"
+        perfSeries={dash.perfSatSeries}
+        benchSymbol={benchSymbol}
+        dashboardHydrated={dash.dashboardHydrated}
+      />
 
       {sp.satelliteHydrated && sp.tableCards && sp.tableCards.length > 0 ? (
         <SatellitePositionsTable
