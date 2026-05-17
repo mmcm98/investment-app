@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fmpInstrumentSymbol } from '../../lib/market/fmpInstrumentSymbol.js'
+import { useSharesightIntegration } from '../../context/SharesightIntegrationContext.jsx'
 
 /** @param {unknown} v */
 function numFin(v) {
@@ -15,6 +15,12 @@ function fmtAud(n) {
   return Number(n).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2 })
 }
 
+/** @param {number|null|undefined} n */
+function fmtNum(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 })
+}
+
 /** @param {number|null|undefined} n @param {string} cur */
 function fmtNative(n, cur) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -23,65 +29,52 @@ function fmtNative(n, cur) {
 }
 
 /** @param {number|null|undefined} n */
-function fmtPct(n) {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
-  return `${Number(n).toFixed(2)}%`
-}
-
-/** @param {number|null|undefined} n */
-function fmtNum(n) {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
-  return Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 })
-}
-
-/** @param {number|null|undefined} n */
 function fmtScore(n) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
   return Number(n).toFixed(0)
 }
 
-/** @param {string} group */
-function groupSortRank(group) {
-  if (group === 'ASX') return 0
-  if (group === 'LSE') return 1
-  if (group === 'Cash Accounts') return 400
-  return 100
+/** @param {unknown} raw */
+function tierLabel(raw) {
+  const label = `${raw ?? ''}`.toLowerCase()
+  if (label.includes('high')) return 'Tier 1'
+  if (label.includes('qualified')) return 'Tier 2'
+  if (label.includes('haircut')) return 'Tier 3'
+  return '—'
 }
 
-/** @param {Record<string, unknown>[]} rows */
-function subtotalMetrics(rows) {
-  let value = 0
-  let gain = 0
-  for (const r of rows) {
-    const va = numFin(r.valueAud)
-    const cg = numFin(r.capitalGainAud)
-    if (va != null) value += va
-    if (cg != null) gain += cg
-  }
-  return { value, gain }
+/** @param {unknown} row */
+function persistedOrderForRow(row) {
+  const pos = row && typeof row === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (row), 'position') : null
+  const extra = pos && typeof pos === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (pos), 'extra') : null
+  const raw = extra && typeof extra === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (extra), 'satellite_table_order') : null
+  const n = typeof raw === 'number' ? raw : Number.parseFloat(`${raw ?? ''}`)
+
+  return Number.isFinite(n) ? n : null
 }
 
-const STORAGE_COLUMNS = 'satellitePositionsTable.columnOrder.v1'
-const STORAGE_HIDDEN = 'satellitePositionsTable.hiddenColumns.v1'
+/** @param {unknown} row */
+function rowExtra(row) {
+  const pos = row && typeof row === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (row), 'position') : null
+  const extra = pos && typeof pos === 'object' ? Reflect.get(/** @type {Record<string, unknown>} */ (pos), 'extra') : null
 
+  return extra && typeof extra === 'object' ? { .../** @type {Record<string, unknown>} */ (extra) } : {}
+}
+
+const STORAGE_COLUMNS = 'satellitePositionsTable.columnOrder.v2'
+const STORAGE_HIDDEN = 'satellitePositionsTable.hiddenColumns.v2'
 const TYPE_OPTIONS = ['Compounder', 'Cyclical', 'Turnaround', 'Yield']
 
 const DEFAULT_COLUMNS = /** @type {const} */ ([
-  { id: 'logo', label: 'Logo', removable: true },
   { id: 'ticker', label: 'Ticker', removable: false },
-  { id: 'exch', label: 'Exch', removable: true },
+  { id: 'exchange', label: 'Exchange', removable: true },
   { id: 'company', label: 'Company', removable: true },
   { id: 'type', label: 'Type', removable: true },
   { id: 'tier', label: 'Tier', removable: true },
-  { id: 'score', label: 'Score', removable: true },
-  { id: 'cur', label: 'Cur', removable: true },
+  { id: 'score', label: 'Score', removable: true, align: 'right' },
   { id: 'price', label: 'Price', removable: true, align: 'right' },
   { id: 'qty', label: 'Qty', removable: true, align: 'right' },
   { id: 'valueAud', label: 'Value (AUD)', removable: true, align: 'right' },
-  { id: 'costBasis', label: 'Cost basis', removable: true, align: 'right' },
-  { id: 'capGain', label: 'Cap gain', removable: true, align: 'right' },
-  { id: 'income', label: 'Income', removable: true, align: 'right' },
-  { id: 'return', label: 'Return', removable: true, align: 'right' },
   { id: 'totalReturn', label: 'Total return', removable: true, align: 'right' },
   { id: 'actions', label: 'Actions', removable: false, align: 'right' },
 ])
@@ -100,26 +93,15 @@ function loadStringArray(key, fallback) {
   }
 }
 
-/** @param {unknown} raw */
-function tierLabel(raw) {
-  const label = `${raw ?? ''}`.toLowerCase()
-  if (label.includes('high')) return 'Tier 1'
-  if (label.includes('qualified')) return 'Tier 2'
-  if (label.includes('haircut')) return 'Tier 3'
-  return '—'
-}
-
-/** @param {unknown} audValue @param {unknown} pctValue @param {'aud'|'pct'} mode */
-function metricCell(audValue, pctValue, mode) {
-  return mode === 'aud' ? fmtAud(numFin(audValue)) : fmtPct(numFin(pctValue))
-}
-
 /**
- * @param {{ tableCards: Record<string, unknown>[], onTypeChange?: (positionId: string, nextType: string) => Promise<void>|void }} props
+ * @param {{
+ *   tableCards: Record<string, unknown>[],
+ *   onTypeChange?: (positionId: string, nextType: string) => Promise<void>|void
+ * }} props
  */
 export function SatellitePositionsTable({ tableCards, onTypeChange }) {
+  const { supabase } = useSharesightIntegration()
   const [includeClosed, setIncludeClosed] = useState(false)
-  const [valueMode, setValueMode] = useState(/** @type {'aud'|'pct'} */ ('aud'))
   const [editTable, setEditTable] = useState(false)
   const [rowOrder, setRowOrder] = useState(/** @type {string[]} */ ([]))
   const [dragRowKey, setDragRowKey] = useState(/** @type {string|null} */ (null))
@@ -153,45 +135,77 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       .filter(Boolean)
   }, [columnOrder, columnsById, hiddenColumns])
 
-  const openRows = useMemo(
-    () => tableCards.filter((row) => !row.rowClosed && !row.isCashLike),
-    [tableCards],
+  const sourceRows = useMemo(
+    () => (includeClosed ? tableCards : tableCards.filter((row) => !row.rowClosed)).filter((row) => !row.isCashLike),
+    [includeClosed, tableCards],
   )
-
-  const visibleRows = useMemo(() => {
-    const source = (includeClosed ? tableCards : openRows).filter((row) => !row.isCashLike)
-    const order = rowOrder.length ? rowOrder : source.map((row) => `${row.rowKey}`)
-    const rank = new Map(order.map((key, index) => [key, index]))
-
-    return [...source].sort((a, b) => {
-      const ak = `${a.rowKey}`
-      const bk = `${b.rowKey}`
-      const ar = rank.has(ak) ? rank.get(ak) ?? 0 : Number.MAX_SAFE_INTEGER
-      const br = rank.has(bk) ? rank.get(bk) ?? 0 : Number.MAX_SAFE_INTEGER
-      if (ar !== br) return ar - br
-
-      const ag = `${a.exchangeGroup ?? 'Other'}`
-      const bg = `${b.exchangeGroup ?? 'Other'}`
-      return groupSortRank(ag) - groupSortRank(bg) || `${a.ticker ?? ''}`.localeCompare(`${b.ticker ?? ''}`)
-    })
-  }, [includeClosed, openRows, rowOrder, tableCards])
 
   useEffect(() => {
     queueMicrotask(() => {
       setRowOrder((prev) => {
-        const keys = tableCards.map((row) => `${row.rowKey}`)
-        return [...prev.filter((key) => keys.includes(key)), ...keys.filter((key) => !prev.includes(key))]
+        const sortedByPersisted = [...sourceRows]
+          .map((row, index) => ({ key: `${row.rowKey}`, order: persistedOrderForRow(row), index }))
+          .sort((a, b) => {
+            if (a.order != null && b.order != null && a.order !== b.order) return a.order - b.order
+            if (a.order != null && b.order == null) return -1
+            if (a.order == null && b.order != null) return 1
+            return a.index - b.index
+          })
+          .map((row) => row.key)
+
+        return [...prev.filter((key) => sortedByPersisted.includes(key)), ...sortedByPersisted.filter((key) => !prev.includes(key))]
       })
     })
-  }, [tableCards])
+  }, [sourceRows])
 
-  const summary = useMemo(() => {
-    const t = subtotalMetrics(openRows)
-    return {
-      portfolioValue: t.value,
-      capitalGain: t.gain,
-    }
-  }, [openRows])
+  const visibleRows = useMemo(() => {
+    const rank = new Map((rowOrder.length ? rowOrder : sourceRows.map((row) => `${row.rowKey}`)).map((key, index) => [key, index]))
+
+    return [...sourceRows].sort((a, b) => {
+      const ak = `${a.rowKey}`
+      const bk = `${b.rowKey}`
+      const ar = rank.has(ak) ? rank.get(ak) ?? 0 : Number.MAX_SAFE_INTEGER
+      const br = rank.has(bk) ? rank.get(bk) ?? 0 : Number.MAX_SAFE_INTEGER
+
+      return ar - br || `${a.ticker ?? ''}`.localeCompare(`${b.ticker ?? ''}`)
+    })
+  }, [rowOrder, sourceRows])
+
+  const persistRowOrder = useCallback(
+    async (nextOrder) => {
+      if (!supabase) return
+
+      const { data: ud } = await supabase.auth.getUser()
+      const uid = ud.user?.id
+      if (!uid) return
+
+      const byKey = new Map(tableCards.map((row) => [`${row.rowKey}`, row]))
+      const updates = nextOrder
+        .map((key, index) => {
+          const row = byKey.get(key)
+          const positionId = row?.positionId ? `${row.positionId}` : ''
+
+          if (!positionId) return null
+
+          return {
+            positionId,
+            extra: { ...rowExtra(row), satellite_table_order: index },
+          }
+        })
+        .filter(Boolean)
+
+      await Promise.all(
+        updates.map((u) =>
+          supabase
+            .from('positions')
+            .update({ extra: u.extra, updated_at: new Date().toISOString() })
+            .eq('id', u.positionId)
+            .eq('user_id', uid),
+        ),
+      )
+    },
+    [supabase, tableCards],
+  )
 
   const moveColumn = useCallback((fromId, toId) => {
     if (!fromId || !toId || fromId === toId) return
@@ -211,29 +225,23 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       if (!fromKey || !toKey || fromKey === toKey) return
       setRowOrder((prev) => {
         const keys = visibleRows.map((row) => `${row.rowKey}`)
-        const next = prev.length ? [...prev] : keys
+        const next = prev.length ? [...prev.filter((key) => keys.includes(key))] : keys
         const from = next.indexOf(fromKey)
         const to = next.indexOf(toKey)
         if (from < 0 || to < 0) return prev
         const [item] = next.splice(from, 1)
         next.splice(to, 0, item)
+        void persistRowOrder(next)
         return next
       })
     },
-    [visibleRows],
+    [persistRowOrder, visibleRows],
   )
-
-  const imgSrcForRow = useCallback((row) => {
-    const base = `${row.fmpSymbol ?? ''}`.trim()
-    if (!base) return ''
-    const full = `${row.fmpProfileSymbol ?? ''}`.trim() || fmpInstrumentSymbol(base, `${row.exchangeShort ?? ''}`)
-    return `https://financialmodelingprep.com/image-stock/${encodeURIComponent(full)}.png`
-  }, [])
 
   const renderCell = useCallback(
     (row, columnId) => {
       const q = row.mergedQuote && typeof row.mergedQuote === 'object' ? /** @type {Record<string, unknown>} */ (row.mergedQuote) : null
-      const native =
+      const nativePrice =
         q && typeof q.display_native === 'number'
           ? q.display_native
           : q && typeof q.last_price === 'number'
@@ -244,28 +252,6 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       const currentType = `${row.assetClass ?? ''}`.trim()
 
       switch (columnId) {
-        case 'logo': {
-          const img = imgSrcForRow(row)
-          const letter = `${row.ticker ?? '?'}`.trim().charAt(0).toUpperCase() || '?'
-
-          return (
-            <div className="relative flex h-5 w-5 items-center justify-center overflow-hidden rounded-full bg-[#1A1A24] ring-1 ring-[rgba(255,255,255,0.08)]">
-              <span className="absolute inset-0 flex items-center justify-center font-mono text-[9px] font-semibold text-[#4DB8FF]">
-                {letter}
-              </span>
-              {img ? (
-                <img
-                  src={img}
-                  alt=""
-                  className="relative z-10 h-5 w-5 object-cover"
-                  onError={(e) => {
-                    e.currentTarget.style.visibility = 'hidden'
-                  }}
-                />
-              ) : null}
-            </div>
-          )
-        }
         case 'ticker':
           return (
             <div className="flex flex-wrap items-center gap-2 font-mono text-[13px] text-[#4DB8FF]">
@@ -277,7 +263,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
               ) : null}
             </div>
           )
-        case 'exch':
+        case 'exchange':
           return `${row.exchangeShort || row.exchangeGroup || '—'}`.trim() || '—'
         case 'company':
           return <span className="line-clamp-2 min-w-[180px]">{`${row.displayName ?? '—'}`}</span>
@@ -303,24 +289,14 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
           return tierLabel(row.tier)
         case 'score':
           return fmtScore(numFin(row.overallScore))
-        case 'cur':
-          return cur || '—'
         case 'price':
-          return fmtNative(native, cur)
+          return fmtNative(nativePrice, cur)
         case 'qty':
           return fmtNum(numFin(row.quantity))
         case 'valueAud':
           return fmtAud(numFin(row.valueAud))
-        case 'costBasis':
-          return fmtAud(numFin(row.costBasis))
-        case 'capGain':
-          return metricCell(row.capitalGainAud, row.returnPct, valueMode)
-        case 'income':
-          return metricCell(row.payoutGainAud, row.incomePct, valueMode)
-        case 'return':
-          return metricCell(row.capitalGainAud, row.returnPct, valueMode)
         case 'totalReturn':
-          return metricCell(row.totalGainAud, row.totalReturnPct, valueMode)
+          return fmtAud(numFin(row.totalGainAud))
         case 'actions':
           return pid ? (
             <Link className="whitespace-nowrap font-mono text-[11px] text-[#4DB8FF] hover:text-[#79CBFF]" to={`/satellite/position/${pid}`}>
@@ -333,62 +309,16 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
           return '—'
       }
     },
-    [imgSrcForRow, onTypeChange, valueMode],
+    [onTypeChange],
   )
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#111118] px-4 py-3">
-        <div className="flex flex-wrap gap-6 font-mono text-xs text-[#F0F0F8]">
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-[#505068]">Portfolio value</span>
-            <div className="mt-0.5 text-sm">{fmtAud(summary.portfolioValue)}</div>
-          </div>
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-[#505068]">Live capital gain</span>
-            <div
-              className={`mt-0.5 text-sm ${
-                summary.capitalGain != null && summary.capitalGain >= 0 ? 'text-[#22C55E]' : 'text-[#EF4444]'
-              }`}
-            >
-              {fmtAud(summary.capitalGain)}
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-4 text-xs">
-        <div className="flex flex-wrap items-center gap-4">
-          <label className="flex cursor-pointer items-center gap-2 text-[#9090A8]">
-            <input type="checkbox" checked={includeClosed} onChange={(e) => setIncludeClosed(e.target.checked)} />
-            Include closed positions
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Gain display</span>
-            <div className="flex rounded border border-[rgba(255,255,255,0.12)] p-0.5">
-              <button
-                type="button"
-                onClick={() => setValueMode('aud')}
-                className={`rounded px-2 py-1 font-mono text-[10px] ${valueMode === 'aud' ? 'bg-[#22222F] text-[#4DB8FF]' : 'text-[#9090A8]'}`}
-              >
-                AU$
-              </button>
-              <button
-                type="button"
-                onClick={() => setValueMode('pct')}
-                className={`rounded px-2 py-1 font-mono text-[10px] ${valueMode === 'pct' ? 'bg-[#22222F] text-[#4DB8FF]' : 'text-[#9090A8]'}`}
-              >
-                %
-              </button>
-            </div>
-          </div>
-          <div className="text-[10px] uppercase tracking-wide text-[#505068]">
-            Group by:{' '}
-            <select className="rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 text-[#F0F0F8]" value="market" disabled>
-              <option value="market">Market</option>
-            </select>
-          </div>
-        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-[#9090A8]">
+          <input type="checkbox" checked={includeClosed} onChange={(e) => setIncludeClosed(e.target.checked)} />
+          Include closed positions
+        </label>
         <button
           type="button"
           onClick={() => setEditTable((v) => !v)}
@@ -403,7 +333,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118]">
-        <table className="w-full min-w-[1620px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1180px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[rgba(255,255,255,0.08)] text-[10px] font-semibold uppercase tracking-wide text-[#505068]">
               {visibleColumns.map((col) => (
@@ -444,17 +374,17 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
               </tr>
             ) : null}
             {visibleRows.map((row) => {
-              const rk = `${row.rowKey}`
+              const rowKey = `${row.rowKey}`
               const closed = Boolean(row.rowClosed)
 
               return (
                 <tr
-                  key={rk}
+                  key={rowKey}
                   draggable
-                  onDragStart={() => setDragRowKey(rk)}
+                  onDragStart={() => setDragRowKey(rowKey)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => {
-                    moveRow(dragRowKey, rk)
+                    moveRow(dragRowKey, rowKey)
                     setDragRowKey(null)
                   }}
                   className={`border-b border-[rgba(255,255,255,0.04)] transition-colors hover:bg-[#22222F] ${
@@ -463,22 +393,17 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
                 >
                   {visibleColumns.map((col) => {
                     const isNumber = col.align === 'right'
-                    const gainish = ['capGain', 'income', 'return', 'totalReturn'].includes(col.id)
-                    const valueForColour =
-                      col.id === 'income'
-                        ? numFin(row.payoutGainAud)
-                        : col.id === 'totalReturn'
-                          ? numFin(row.totalGainAud)
-                          : numFin(row.capitalGainAud)
+                    const isReturn = col.id === 'totalReturn'
+                    const totalReturn = numFin(row.totalGainAud)
 
                     return (
                       <td
-                        key={`${rk}:${col.id}`}
+                        key={`${rowKey}:${col.id}`}
                         className={`px-3 py-2 align-middle text-xs ${
                           isNumber ? 'text-right font-mono' : ''
                         } ${
-                          gainish && valueForColour != null
-                            ? valueForColour >= 0
+                          isReturn && totalReturn != null
+                            ? totalReturn >= 0
                               ? 'text-[#22C55E]'
                               : 'text-[#EF4444]'
                             : isNumber

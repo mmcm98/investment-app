@@ -495,9 +495,29 @@ export function useSatellitePortfolio() {
       const sharesightValueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
       const nativeHoldingValue = ho ? Reflect.get(ho, 'market_value') : null
       const nativeCurrency = ho ? Reflect.get(ho, 'currency') : null
-      const valueAud =
-        sharesightValueAud ??
-        nativeValueToAud(nativeHoldingValue, nativeCurrency, /** @type {Record<string, { aud_per_unit?: number }>} */ (fxByCurrency))
+      const fxCurrency = `${nativeCurrency ?? ''}`.trim().toUpperCase()
+      const fxRate = fxByCurrency[fxCurrency]?.aud_per_unit
+      const marketValueNative = numOrNull(nativeHoldingValue)
+      const fxValueAud = nativeValueToAud(
+        nativeHoldingValue,
+        nativeCurrency,
+        /** @type {Record<string, { aud_per_unit?: number }>} */ (fxByCurrency),
+      )
+      const valueAud = sharesightValueAud ?? fxValueAud
+
+      if (sharesightValueAud == null && fxValueAud != null && fxCurrency !== 'AUD') {
+        console.log('[satellite-value-debug]', {
+          ticker: c.ticker,
+          currency: fxCurrency,
+          sharesight_value_aud: sharesightValueAud,
+          market_value_native: marketValueNative,
+          fx_rate: fxRate,
+          calculated_value_aud:
+            marketValueNative != null && typeof fxRate === 'number' && Number.isFinite(fxRate)
+              ? marketValueNative * fxRate
+              : null,
+        })
+      }
 
       const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
       const cost = valueAud != null && capitalGainHo != null ? valueAud - capitalGainHo : null
