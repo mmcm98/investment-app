@@ -28,7 +28,7 @@ export function readAnalysisEnv(globalEnv) {
       `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() ||
       `${e.VITE_ANTHROPIC_ANALYSIS_MODEL ?? ''}`.trim() ||
       `claude-opus-4-20250514`,
-    geminiModel: `${e.GEMINI_RESEARCH_MODEL ?? ''}`.trim() || `gemini-2.5-flash-preview-05-20`,
-    geminiFlashModel: `${e.GEMINI_FLASH_MODEL ?? ''}`.trim() || `gemini-2.5-flash-preview-05-20`,
+    geminiModel: `${e.GEMINI_RESEARCH_MODEL ?? ''}`.trim() || `gemini-2.5-flash`,
+    geminiFlashModel: `${e.GEMINI_FLASH_MODEL ?? ''}`.trim() || `gemini-2.5-flash`,
   }
 }
