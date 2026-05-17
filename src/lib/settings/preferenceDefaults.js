@@ -93,7 +93,7 @@ export const DEFAULT_PREFERENCES = {
     framework_auto_suggest: true,
     catalyst_attachment_mode: 'auto_manual',
     claude_model: 'claude-opus-4-7',
-    gemini_model: 'gemini-2.0-pro',
+    gemini_model: 'gemini-2.5-pro-preview-05-06',
     monthly_api_spend_threshold_aud: 50,
     watchlist_monitor_threshold_pct: 78,
     high_conviction_tier_pct: 78,
