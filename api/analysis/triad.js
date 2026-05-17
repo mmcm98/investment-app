@@ -26,6 +26,45 @@ function tickerTagFromRow(pos) {
   return t || 'UNKNOWN'
 }
 
+/** @param {unknown} value */
+function textOrEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
+}
+
+/** @param {unknown} raw */
+function marketCodeFromRaw(raw) {
+  const o = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : null
+  const inst = o && Reflect.get(o, 'instrument')
+  const instObj = inst && typeof inst === 'object' ? /** @type {Record<string, unknown>} */ (inst) : null
+
+  return textOrEmpty(Reflect.get(o ?? {}, 'market_code') ?? Reflect.get(instObj ?? {}, 'market_code')).toUpperCase()
+}
+
+/** @param {unknown} holding */
+function inferExchangeFromHolding(holding) {
+  const h = holding && typeof holding === 'object' ? /** @type {Record<string, unknown>} */ (holding) : {}
+  const raw = Reflect.get(h, 'raw')
+  const market = marketCodeFromRaw(raw)
+
+  if (market === 'ASX') return 'ASX'
+  if (market === 'LSE') return 'LSE'
+  if (market) return market
+
+  return 'UNKNOWN'
+}
+
+/** @param {unknown} symbol @param {unknown} exchange */
+function inferYahooSymbol(symbol, exchange) {
+  const s = textOrEmpty(symbol).replace(/^ASX:/i, '')
+  const ex = textOrEmpty(exchange).toUpperCase()
+
+  if (!s) return ''
+  if (ex === 'ASX' && !/\.AX$/i.test(s)) return `${s}.AX`
+  if (ex === 'LSE' && !/\.L$/i.test(s)) return `${s}.L`
+
+  return s
+}
+
 /** @param {unknown} raw */
 function normalizeFrameworkKey(raw) {
   return String(raw ?? '')
@@ -33,6 +72,19 @@ function normalizeFrameworkKey(raw) {
     .toLowerCase()
     .replace(/-/g, '_')
     .replace(/\s+/g, '_')
+}
+
+/** @param {unknown} raw */
+function frameworkKeyFromGeminiRecommendation(raw) {
+  const s = normalizeFrameworkKey(raw)
+
+  if (s === 'regular_stock' || s === 'regular_stocks') return 'regular_stocks'
+  if (s === 'thematic_etf' || s === 'thematic_etfs') return 'thematic_etfs'
+  if (s === 'fund_manager_lic' || s === 'fund_manager_lics' || s === 'fund_managers_lic') return 'fund_managers_lic'
+  if (s === 'speculative_stock' || s === 'speculative_stocks' || s === 'speculative') return 'speculative'
+  if (s === 'alternative_pe' || s === 'alternative_investments_pe' || s === 'alternatives_pe') return 'alternatives_pe'
+
+  return ''
 }
 
 async function userVersionCap(supabase, userId) {
@@ -92,6 +144,77 @@ async function loadWatchlistItem(supabase, watchlistItemId, userId) {
   return data
 }
 
+async function loadSatelliteHolding(supabase, holdingId, userId) {
+  const { data, error } = await supabase
+    .from('sharesight_holdings')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('portfolio_role', 'satellite')
+    .eq('holding_external_id', holdingId)
+    .maybeSingle()
+
+  if (error) throw error
+
+  if (!data) {
+    const e = new Error('holding_not_found')
+
+    e.code = 'not_found'
+
+    throw e
+  }
+
+  return data
+}
+
+async function ensurePositionForHolding(supabase, holding, userId) {
+  const holdingKey = String(holding.holding_external_id ?? '').trim()
+
+  const { data: existing, error: existingErr } = await supabase
+    .from('positions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('sharesight_holding_key', holdingKey)
+    .maybeSingle()
+
+  if (existingErr) throw existingErr
+  if (existing) return existing
+
+  const symbol = textOrEmpty(holding.instrument_symbol).replace(/^ASX:/i, '') || holdingKey
+  const exchange = inferExchangeFromHolding(holding)
+  const yahoo = inferYahooSymbol(symbol, exchange) || symbol
+  const now = new Date().toISOString()
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from('positions')
+    .insert({
+      user_id: userId,
+      kind: 'satellite',
+      fmp_symbol: symbol,
+      exchange_short_name: exchange,
+      yahoo_symbol: yahoo,
+      display_ticker: symbol,
+      currency: textOrEmpty(holding.currency) || 'AUD',
+      name: textOrEmpty(holding.instrument_name) || symbol,
+      sharesight_holding_key: holdingKey,
+      sharesight_portfolio_key: textOrEmpty(holding.portfolio_external_id) || null,
+      sharesight_payload: holding.raw && typeof holding.raw === 'object' ? holding.raw : {},
+      archived: false,
+      closed: holding.closed === true,
+      awaiting_analysis: true,
+      extra: {
+        created_from: 'sharesight_holding_analysis',
+        created_from_holding_id: holdingKey,
+      },
+      updated_at: now,
+    })
+    .select('*')
+    .single()
+
+  if (insertErr) throw insertErr
+
+  return inserted
+}
+
 async function pruneVersions(supabase, userId, positionId, cap) {
   const { data: rows, error } = await supabase
     .from('scorecard_versions')
@@ -138,17 +261,28 @@ async function pruneVersionsWatchlist(supabase, userId, watchlistItemId, cap) {
  * Exactly one parent id allowed.
  *
  * @param {Record<string, unknown>} body
- * @returns {{ kind: 'position' | 'watchlist', id: string } | null}
+ * @returns {{ kind: 'position' | 'watchlist' | 'holding', id: string } | null}
  */
 function resolveAnalysisParent(body) {
   const pid = typeof body.positionId === 'string' ? body.positionId.trim() : ''
   const wid = typeof body.watchlistItemId === 'string' ? body.watchlistItemId.trim() : ''
+  const hid = typeof body.holdingId === 'string' ? body.holdingId.trim() : ''
 
-  if (pid && wid) return null
+  if ([pid, wid, hid].filter(Boolean).length > 1) return null
   if (pid) return { kind: 'position', id: pid }
   if (wid) return { kind: 'watchlist', id: wid }
+  if (hid) return { kind: 'holding', id: hid }
 
   return null
+}
+
+async function materializeAnalysisParent(supabase, userId, parent) {
+  if (parent.kind !== 'holding') return parent
+
+  const holding = await loadSatelliteHolding(supabase, parent.id, userId)
+  const position = await ensurePositionForHolding(supabase, holding, userId)
+
+  return { kind: /** @type {const} */ ('position'), id: String(position.id) }
 }
 
 async function loadAnalysisRow(supabase, userId, parent) {
@@ -160,24 +294,23 @@ async function loadAnalysisRow(supabase, userId, parent) {
 }
 
 async function resolveGeminiJson({ supabase, userId, canonicalKey, tickerTag, pos, cfg, forceRefresh }) {
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data: recentLog } = await supabase
     .from('research_logs')
     .select('id, raw_gemini_json')
+    .eq('user_id', userId)
     .eq('ticker', tickerTag)
-    .gte('timestamp', oneHourAgo)
+    .gte('timestamp', sevenDaysAgo)
     .order('timestamp', { ascending: false })
     .limit(1)
     .maybeSingle()
 
   if (recentLog?.raw_gemini_json && !forceRefresh) {
-    return { gemini: recentLog.raw_gemini_json, source: 'research_logs_1h', researchLogId: recentLog.id }
+    return { gemini: recentLog.raw_gemini_json, source: 'research_logs_7d', researchLogId: recentLog.id }
   }
 
   if (!cfg.geminiApiKey) throw new Error('GEMINI_API_KEY missing')
-
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data: cacheRow } = await supabase
     .from('gemini_research_artefacts')
@@ -195,11 +328,11 @@ async function resolveGeminiJson({ supabase, userId, canonicalKey, tickerTag, po
   }
 
   const prompt = [
-    'Return one JSON object for stock_research (CLAUDE.md). schema_version=1 integer.',
-    `ticker=${pos.fmp_symbol}, exchange=${pos.exchange_short_name}.`,
-    'instrument_type_guess: regular_stock | thematic_etf | fund_manager_lic | speculative | alternative_pe | unknown.',
-    'Include: thesis_summary, business_overview, moat_commentary, financial_summary_commentary, capital_allocation_commentary, valuation_commentary, scenario_outline, peers_commentary, risks, recent_developments, catalysts, management_governance_signals, sentiment, data_gaps_for_fmp_fields, sources[].',
-    'JSON only.',
+    'Research this listed security and return ONLY one valid JSON object. No markdown, no prose outside JSON.',
+    `ticker=${pos.fmp_symbol}, company=${pos.name ?? pos.display_ticker ?? pos.fmp_symbol}, exchange=${pos.exchange_short_name}.`,
+    'Schema:',
+    '{"ticker":string,"company":string,"research_date":string,"thesis_summary":string,"competitive_moat":string,"financials_commentary":string,"key_risks":string[],"recent_developments":string,"management_quality":string,"growth_runway":string,"valuation_commentary":string,"technical_summary":string,"sentiment":"positive|neutral|negative","recommended_framework":"Regular Stock|Thematic ETF|Fund Manager / LIC|Speculative Stock|Alternative / PE"}',
+    'Use Gemini for broad research. Distill findings for Claude; do not include raw source dumps.',
   ].join(' ')
 
   const genAi = new GoogleGenerativeAI(cfg.geminiApiKey)
@@ -303,12 +436,6 @@ async function runSuggestFramework(cfg, supabase, userId, parent) {
 async function runFullAnalysis(cfg, supabase, userId, parent, confirmedFrameworkKey, forceRefreshGemini) {
   await assertGlobalApiNotPaused(supabase, userId)
 
-  const fkIn = normalizeFrameworkKey(confirmedFrameworkKey)
-
-  if (!FRAMEWORK_KEYS.includes(fkIn)) {
-    return { ok: false, code: 'bad_framework', message: 'confirmedFrameworkKey invalid' }
-  }
-
   if (!cfg.anthropicApiKey) return { ok: false, code: 'missing_key', message: 'ANTHROPIC_API_KEY' }
 
   const { row: pos } = await loadAnalysisRow(supabase, userId, parent)
@@ -326,6 +453,15 @@ async function runFullAnalysis(cfg, supabase, userId, parent, confirmedFramework
     cfg,
     forceRefresh: !!forceRefreshGemini,
   })
+
+  const fkIn =
+    normalizeFrameworkKey(confirmedFrameworkKey) ||
+    frameworkKeyFromGeminiRecommendation(gemBundle.gemini?.recommended_framework) ||
+    frameworkKeyFromGeminiRecommendation(gemBundle.gemini?.instrument_type_guess)
+
+  if (!FRAMEWORK_KEYS.includes(fkIn)) {
+    return { ok: false, code: 'bad_framework', message: 'confirmedFrameworkKey invalid and Gemini recommended_framework missing/invalid' }
+  }
 
   const researchLogId = gemBundle.researchLogId
 
@@ -382,7 +518,7 @@ async function runFullAnalysis(cfg, supabase, userId, parent, confirmedFramework
 
     const userText = [
       `Active framework_key: ${fkIn} (${frameworkLabel(fkIn)}).`,
-      'Use this framework only. Produce checklist item count: 60 if regular_stocks else 40.',
+      'Use the Gemini recommended framework as the basis and this active framework only. Produce checklist item count: 60 if regular_stocks else 40.',
       assetClassHint ? `User-declared asset_class for this instrument: ${assetClassHint}. Reflect this in framing where relevant.` : '',
       `Gemini JSON:\n${JSON.stringify(gemBundle.gemini)}`,
       `FMP snapshot:\n${JSON.stringify(fmpSnap ?? {})}`,
@@ -520,15 +656,17 @@ async function dispatch(body, env, authHeader) {
   const parent = resolveAnalysisParent(body ?? {})
 
   if (!parent) {
-    return { ok: false, code: 'bad_request', message: 'Exactly one of positionId or watchlistItemId required' }
+    return { ok: false, code: 'bad_request', message: 'Exactly one of positionId, watchlistItemId, or holdingId required' }
   }
 
+  const analysisParent = await materializeAnalysisParent(supabase, userId, parent)
+
   if (step === 'suggest-framework') {
-    return await runSuggestFramework(cfg, supabase, userId, parent)
+    return await runSuggestFramework(cfg, supabase, userId, analysisParent)
   }
 
   if (step === 'run-analysis') {
-    return await runFullAnalysis(cfg, supabase, userId, parent, body.confirmedFrameworkKey, body.forceRefreshGemini === true)
+    return await runFullAnalysis(cfg, supabase, userId, analysisParent, body.confirmedFrameworkKey, body.forceRefreshGemini === true)
   }
 
   return { ok: false, code: 'bad_request', message: 'unknown step' }

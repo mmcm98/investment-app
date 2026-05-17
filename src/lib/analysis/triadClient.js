@@ -1,7 +1,7 @@
 /**
- * Exactly one parent id (`positionId` or `watchlistItemId`).
+ * Exactly one parent id (`positionId`, `watchlistItemId`, or `holdingId`).
  *
- * @typedef {{ step: string, positionId?: string, watchlistItemId?: string }} TriadSuggestBody
+ * @typedef {{ step: string, positionId?: string, watchlistItemId?: string, holdingId?: string }} TriadSuggestBody
  * @typedef {TriadSuggestBody & { confirmedFrameworkKey: string, forceRefreshGemini?: boolean }} TriadRunBody
  */
 

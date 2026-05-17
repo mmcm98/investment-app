@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
+import { postTriadAnalysis } from '../lib/analysis/triadClient.js'
 
 const TABS = /** @type {const} */ ([
   { id: 'scorecard', label: 'Scorecard' },
@@ -82,8 +84,11 @@ function EmptyState({ children }) {
 export function SatellitePositionAnalysis() {
   const params = useParams()
   const navigate = useNavigate()
+  const { supabase } = useSharesightIntegration()
   const sp = useSatellitePortfolio()
   const [tab, setTab] = useState(/** @type {(typeof TABS)[number]['id']} */ ('scorecard'))
+  const [analysisPhase, setAnalysisPhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
+  const [analysisMessage, setAnalysisMessage] = useState('')
 
   const routeId = `${params.id ?? params.holdingId ?? ''}`.trim()
   const rows = useMemo(() => /** @type {Record<string, unknown>[]} */ (sp.tableCards ?? []), [sp.tableCards])
@@ -117,6 +122,43 @@ export function SatellitePositionAnalysis() {
   const generatedAt = asText(research?.generated_at ?? research?.date_generated ?? research?.created_at)
   const modelUsed = asText(research?.model ?? research?.models ?? research?.gemini_model ?? research?.claude_model)
   const markdown = asText(research?.markdown ?? research?.body_md ?? research?.content)
+  const runHoldingId = `${row?.holdingId ?? row?.id ?? row?.sharesight_id ?? routeId}`.trim()
+  const runDisabled = analysisPhase === 'running' || !runHoldingId
+
+  async function runAnalysis() {
+    if (!supabase || !runHoldingId) return
+
+    setAnalysisPhase('running')
+    setAnalysisMessage('Running Gemini research and Claude scorecard synthesis...')
+
+    try {
+      const { data, error } = await supabase.auth.getSession()
+      if (error) throw error
+
+      const token = data.session?.access_token
+      if (!token) throw new Error('Not signed in.')
+
+      const out = await postTriadAnalysis(
+        {
+          step: 'run-analysis',
+          holdingId: runHoldingId,
+        },
+        { accessToken: token },
+      )
+
+      if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
+        throw new Error('Unexpected Triad API response.')
+      }
+
+      setAnalysisPhase('done')
+      setAnalysisMessage(
+        `Analysis complete. Version ${Reflect.get(out, 'version_number') ?? '—'} created with overall score ${Reflect.get(out, 'overall_score') ?? '—'}%.`,
+      )
+    } catch (error) {
+      setAnalysisPhase('error')
+      setAnalysisMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   if (sp.satelliteHydrated && !row) {
     return (
@@ -153,13 +195,29 @@ export function SatellitePositionAnalysis() {
               <span>Current price: <span className="text-[#F0F0F8]">{fmtNative(currentPrice, currency)}</span></span>
             </div>
           </div>
-          <button
-            type="button"
-            disabled
-            className="rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#1A1A24] px-4 py-2 font-mono text-xs text-[#505068]"
-          >
-            Run analysis
-          </button>
+          <div className="flex flex-col items-end gap-2">
+            <button
+              type="button"
+              disabled={runDisabled}
+              onClick={() => void runAnalysis()}
+              className={`rounded-lg border px-4 py-2 font-mono text-xs ${
+                runDisabled
+                  ? 'border-[rgba(255,255,255,0.08)] bg-[#1A1A24] text-[#505068]'
+                  : 'border-[#4DB8FF] bg-[rgba(77,184,255,0.12)] text-[#79CBFF] hover:bg-[rgba(77,184,255,0.18)]'
+              }`}
+            >
+              {analysisPhase === 'running' ? 'Running analysis...' : 'Run analysis'}
+            </button>
+            {analysisMessage ? (
+              <p
+                className={`max-w-[320px] text-right font-mono text-[10px] ${
+                  analysisPhase === 'error' ? 'text-[#EF4444]' : analysisPhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'
+                }`}
+              >
+                {analysisMessage}
+              </p>
+            ) : null}
+          </div>
         </div>
       </header>
 

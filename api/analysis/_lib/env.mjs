@@ -22,7 +22,7 @@ export function readAnalysisEnv(globalEnv) {
       `${e.VITE_FMP_API_KEY ?? ''}`.trim() ||
       `${e.VITE_FMP ?? ''}`.trim(),
     claudeModel:
-      `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() || `${e.VITE_ANTHROPIC_ANALYSIS_MODEL ?? ''}`.trim() || `claude-opus-4-20250514`,
+      `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() || `${e.VITE_ANTHROPIC_ANALYSIS_MODEL ?? ''}`.trim() || `claude-sonnet-4-20250514`,
     briefingClaudeModel:
       `${e.CLAUDE_BRIEFING_MODEL ?? ''}`.trim() ||
       `${e.CLAUDE_ANALYSIS_MODEL ?? ''}`.trim() ||
