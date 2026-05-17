@@ -6,7 +6,7 @@ import { DashboardHome } from './routes/DashboardHome.jsx'
 import { OAuthCallback } from './routes/OAuthCallback.jsx'
 import { AuthPage } from './routes/AuthPage.jsx'
 import { SatellitePortfolio } from './routes/SatellitePortfolio.jsx'
-import { PositionDetail } from './routes/PositionDetail.jsx'
+import { SatellitePositionAnalysis } from './routes/SatellitePositionAnalysis.jsx'
 import { CorePortfolio } from './routes/CorePortfolio.jsx'
 import { WatchlistPage } from './routes/WatchlistPage.jsx'
 import { WatchlistItemDetail } from './routes/WatchlistItemDetail.jsx'
@@ -82,7 +82,9 @@ function AppRoutes() {
 
         <Route path="satellite" element={<SatellitePortfolio />} />
 
-        <Route path="satellite/position/:id" element={<PositionDetail />} />
+        <Route path="satellite/position/:id" element={<SatellitePositionAnalysis />} />
+
+        <Route path="satellite/:holdingId/analysis" element={<SatellitePositionAnalysis />} />
 
         <Route path="watchlist" element={<WatchlistPage />} />
 
