@@ -62,14 +62,14 @@ export default async function handler(req, res) {
 
     if (jobErr) throw jobErr
 
-    const edgeUrl = `${cfg.supabaseUrl.replace(/\/$/, '')}/functions/v1/run-triad-analysis`
+    const edgeUrl = `${cfg.supabaseUrl.replace(/\/$/, '')}/functions/v1/run-gemini-research`
     const edgeResp = await fetch(edgeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${ctx.accessToken}`,
       },
-      body: JSON.stringify({ job_id: job.id }),
+      body: JSON.stringify({ job_id: job.id, holdingId }),
     })
 
     if (!edgeResp.ok) {

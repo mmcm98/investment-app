@@ -87,6 +87,12 @@ function analysisProgressMessage(elapsedSeconds) {
   return 'Finalising results...'
 }
 
+function analysisStatusMessage(status, elapsedSeconds) {
+  if (status === 'gemini_complete') return 'Synthesising scorecard with Claude...'
+  if (status === 'pending') return 'Gathering research with Gemini...'
+  return analysisProgressMessage(elapsedSeconds)
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -169,6 +175,10 @@ export function SatellitePositionAnalysis() {
         const job = status && typeof status === 'object' ? Reflect.get(status, 'job') : null
         const jobObj = job && typeof job === 'object' ? /** @type {Record<string, unknown>} */ (job) : null
         const state = `${jobObj?.status ?? ''}`
+        const elapsed = Math.floor((Date.now() - started) / 1000)
+
+        setAnalysisElapsed(elapsed)
+        setAnalysisMessage(analysisStatusMessage(state, elapsed))
 
         if (state === 'complete') {
           if (timer) clearInterval(timer)

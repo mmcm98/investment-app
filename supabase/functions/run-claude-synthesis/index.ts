@@ -65,30 +65,23 @@ function parseJson(textBody: string) {
   return JSON.parse(body)
 }
 
-async function geminiResearch(input: { ticker: string; company: string; exchange: string }) {
-  const apiKey = env('GEMINI_API_KEY') || env('GOOGLE_GEMINI_API_KEY')
-  if (!apiKey) throw new Error('GEMINI_API_KEY missing')
-
-  const model = env('GEMINI_RESEARCH_MODEL') || 'gemini-2.5-flash'
-  const prompt = [
-    'Research this listed security and return ONLY valid JSON. No markdown.',
-    `ticker=${input.ticker}, company=${input.company}, exchange=${input.exchange}.`,
-    'Schema: {"ticker":string,"company":string,"research_date":string,"thesis_summary":string,"competitive_moat":string,"financials_commentary":string,"key_risks":string[],"recent_developments":string,"management_quality":string,"growth_runway":string,"valuation_commentary":string,"technical_summary":string,"sentiment":"positive|neutral|negative","recommended_framework":"Regular Stock|Thematic ETF|Fund Manager / LIC|Speculative Stock|Alternative / PE"}',
-  ].join('\n')
-
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json' },
-    }),
+function userSupabase(req: Request) {
+  return createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
+    global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
+    auth: { persistSession: false, autoRefreshToken: false },
   })
+}
 
-  if (!res.ok) throw new Error(`Gemini failed (${res.status}): ${await res.text()}`)
-
-  const json = await res.json()
-  return parseJson(json.candidates?.[0]?.content?.parts?.[0]?.text ?? '')
+async function failJob(req: Request, jobId: string, error: unknown) {
+  const supabase = userSupabase(req)
+  await supabase
+    .from('analysis_jobs')
+    .update({
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId)
 }
 
 async function claudeSynthesis(geminiJson: Record<string, unknown>, meta: Record<string, unknown>) {
@@ -126,26 +119,18 @@ async function claudeSynthesis(geminiJson: Record<string, unknown>, meta: Record
   return parseJson(json.content?.filter((b: Record<string, unknown>) => b.type === 'text').map((b: Record<string, unknown>) => b.text).join('\n') ?? '')
 }
 
-async function runJob(req: Request, jobId: string) {
-  const supabaseUrl = env('SUPABASE_URL')
-  const supabaseAnon = env('SUPABASE_ANON_KEY')
-  const auth = req.headers.get('Authorization') ?? ''
-  const supabase = createClient(supabaseUrl, supabaseAnon, {
-    global: { headers: { Authorization: auth } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
-
+async function runClaude(req: Request, jobId: string) {
+  const supabase = userSupabase(req)
   const { data: userData, error: userError } = await supabase.auth.getUser()
   if (userError || !userData.user?.id) throw userError ?? new Error('unauthorized')
 
   const userId = userData.user.id
-  await supabase.from('analysis_jobs').update({ status: 'running', updated_at: new Date().toISOString() }).eq('id', jobId).eq('user_id', userId)
-
   const { data: settings } = await supabase.from('user_settings').select('global_api_pause').eq('user_id', userId).maybeSingle()
   if (settings?.global_api_pause === true) throw new Error('global_api_pause')
 
   const { data: job, error: jobError } = await supabase.from('analysis_jobs').select('*').eq('id', jobId).eq('user_id', userId).maybeSingle()
   if (jobError || !job) throw jobError ?? new Error('job_not_found')
+  if (!job.raw_gemini_json) throw new Error('raw_gemini_json missing')
 
   const { data: holding, error: holdingError } = await supabase
     .from('sharesight_holdings')
@@ -160,31 +145,7 @@ async function runJob(req: Request, jobId: string) {
   const ticker = text(holding.instrument_symbol).replace(/^ASX:/i, '') || text(job.holding_id)
   const exchange = inferExchange(holding)
   const company = text(holding.instrument_name) || ticker
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  const { data: cachedLog } = await supabase
-    .from('research_logs')
-    .select('id, raw_gemini_json')
-    .eq('user_id', userId)
-    .eq('ticker', ticker.toUpperCase())
-    .gte('timestamp', sevenDaysAgo)
-    .order('timestamp', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  let geminiJson = cachedLog?.raw_gemini_json
-  let researchLogId = cachedLog?.id
-
-  if (!geminiJson) {
-    geminiJson = await geminiResearch({ ticker, company, exchange })
-    const { data: inserted, error: logError } = await supabase
-      .from('research_logs')
-      .insert({ user_id: userId, ticker: ticker.toUpperCase(), raw_gemini_json: geminiJson, claude_synthesis_status: 'pending' })
-      .select('id')
-      .single()
-    if (logError) throw logError
-    researchLogId = inserted.id
-  }
-
+  const geminiJson = job.raw_gemini_json as Record<string, unknown>
   const scorecard = await claudeSynthesis(geminiJson, {
     ticker,
     company,
@@ -291,7 +252,12 @@ async function runJob(req: Request, jobId: string) {
     .eq('id', holding.id)
     .eq('user_id', userId)
 
-  if (researchLogId) await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
+  await supabase
+    .from('research_logs')
+    .update({ claude_synthesis_status: 'success' })
+    .eq('user_id', userId)
+    .eq('ticker', ticker.toUpperCase())
+    .eq('claude_synthesis_status', 'pending')
 
   await supabase
     .from('analysis_jobs')
@@ -303,6 +269,7 @@ async function runJob(req: Request, jobId: string) {
         position_id: position.id,
         overall_score: overall,
       },
+      error: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', jobId)
@@ -315,21 +282,7 @@ Deno.serve(async (req) => {
     const jobId = text(body.job_id)
     if (!jobId) return new Response(JSON.stringify({ ok: false, error: 'job_id required' }), { status: 400 })
 
-    const task = runJob(req, jobId).catch(async (error) => {
-      try {
-        const supabase = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
-          global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
-          auth: { persistSession: false, autoRefreshToken: false },
-        })
-        await supabase
-          .from('analysis_jobs')
-          .update({ status: 'failed', error: error instanceof Error ? error.message : String(error), updated_at: new Date().toISOString() })
-          .eq('id', jobId)
-      } catch {
-        // Best-effort failure write.
-      }
-    })
-
+    const task = runClaude(req, jobId).catch((error) => failJob(req, jobId, error))
     EdgeRuntime.waitUntil(task)
 
     return new Response(JSON.stringify({ ok: true, accepted: true }), {

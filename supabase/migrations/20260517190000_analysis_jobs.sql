@@ -3,11 +3,12 @@ create table if not exists public.analysis_jobs (
   user_id uuid not null references auth.users (id) on delete cascade,
   holding_id text not null,
   status text not null default 'pending',
+  raw_gemini_json jsonb,
   result jsonb,
   error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint analysis_jobs_status_valid check (status in ('pending', 'running', 'complete', 'failed')),
+  constraint analysis_jobs_status_valid check (status in ('pending', 'gemini_complete', 'complete', 'failed')),
   constraint analysis_jobs_holding_not_blank check (length(trim(holding_id)) > 0)
 );
 
