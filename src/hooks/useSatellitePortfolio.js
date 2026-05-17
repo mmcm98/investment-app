@@ -545,11 +545,13 @@ export function useSatellitePortfolio() {
       const fmpProfileSymbol = fmpInstrumentSymbol(fmpSymbol, exchangeShort)
 
       const exchangeGroup = exchangeGroupForRow(pos, h)
+      const exchange = (pos && `${Reflect.get(pos, 'exchange_short_name') ?? ''}`.trim()) || '—'
 
       return {
         ...c,
         rowClosed,
         isCashLike: isCashLikeRow,
+        exchange,
         exchangeGroup,
         fmpSymbol,
         exchangeShort,

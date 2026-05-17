@@ -63,7 +63,14 @@ function rowExtra(row) {
 
 /** @param {Record<string, unknown>} row */
 function exchangeLabelForRow(row) {
-  return `${row.exchangeShort || row.exchangeGroup || 'Other'}`.trim() || 'Other'
+  return `${row.exchange ?? '—'}`.trim() || '—'
+}
+
+/** @param {Record<string, unknown>} row */
+function exchangeGroupForRow(row) {
+  const exchange = exchangeLabelForRow(row)
+
+  return exchange === '—' ? 'Other' : exchange
 }
 
 /** @param {Record<string, unknown>[]} rows */
@@ -74,7 +81,7 @@ function groupRowsByExchange(rows) {
   const byExchange = new Map()
 
   for (const row of rows) {
-    const exchange = exchangeLabelForRow(row)
+    const exchange = exchangeGroupForRow(row)
     let group = byExchange.get(exchange)
 
     if (!group) {
