@@ -99,7 +99,7 @@ function groupRowsByExchange(rows) {
 
 const STORAGE_COLUMNS = 'satellitePositionsTable.columnOrder.v2'
 const STORAGE_HIDDEN = 'satellitePositionsTable.hiddenColumns.v2'
-const TYPE_OPTIONS = ['Compounder', 'Cyclical', 'Turnaround', 'Yield']
+const TYPE_OPTIONS = ['Regular Stock', 'Thematic ETF', 'Fund Manager / LIC', 'Speculative Stock', 'Alternative / PE']
 
 const DEFAULT_COLUMNS = /** @type {const} */ ([
   { id: 'ticker', label: 'Ticker', removable: false },
@@ -313,7 +313,9 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
             <select
               value={TYPE_OPTIONS.includes(currentType) ? currentType : ''}
               disabled={!pid}
+              onClick={(e) => e.stopPropagation()}
               onChange={(e) => {
+                e.stopPropagation()
                 if (pid) void onTypeChange?.(pid, e.target.value)
               }}
               className="min-w-[130px] rounded border border-[rgba(255,255,255,0.12)] bg-[#1A1A24] px-2 py-1 text-xs text-[#F0F0F8] disabled:opacity-50"
