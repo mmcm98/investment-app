@@ -137,16 +137,6 @@ function sharesightExchangeDisplay(h) {
   return valuation ? `${Reflect.get(valuation, 'exchange_display') ?? ''}`.trim() : ''
 }
 
-/** @param {Record<string, unknown>|null|undefined} h */
-function sharesightAveragePurchasePriceNative(h) {
-  const direct = h ? numOrNull(Reflect.get(h, 'average_purchase_price')) : null
-  if (direct != null) return direct
-
-  const valuation = valuationSnapshot(h)
-
-  return valuation ? numOrNull(Reflect.get(valuation, 'average_purchase_price')) : null
-}
-
 /**
  * @param {Record<string, unknown>|null} pos
  * @param {Record<string, unknown>|null|undefined} h
@@ -488,11 +478,10 @@ export function useSatellitePortfolio() {
 
       const qty = ho ? resolveSharesightHoldingQuantity(ho) : null
 
-      const cost = ho ? numOrNull(Reflect.get(ho, 'cost_basis')) : null
-
       const valueAud = ho ? resolveSharesightHoldingValueAud(ho) : null
 
       const capitalGainHo = ho ? numOrNull(Reflect.get(ho, 'unrealized_gain_loss')) : null
+      const cost = valueAud != null && capitalGainHo != null ? valueAud - capitalGainHo : null
       const payoutGainAud = ho ? numOrNull(Reflect.get(ho, 'payout_gain')) : null
       const totalGainAud = ho ? numOrNull(Reflect.get(ho, 'total_gain')) : null
       const capitalGainPercent = ho ? numOrNull(Reflect.get(ho, 'capital_gain_percent')) : null
@@ -505,11 +494,6 @@ export function useSatellitePortfolio() {
       const capitalGainAud =
         capitalGainHo ??
         (valueAud != null && cost != null && Number.isFinite(valueAud) && Number.isFinite(cost) ? valueAud - cost : null)
-
-      const avgBuyFromSharesight = sharesightAveragePurchasePriceNative(ho)
-      const avgBuyNative =
-        avgBuyFromSharesight ??
-        (qty != null && qty !== 0 && cost != null && Number.isFinite(cost) ? cost / qty : null)
 
       const q = c.mergedQuote
 
@@ -540,7 +524,6 @@ export function useSatellitePortfolio() {
         totalGainAud,
         returnPct: capitalGainPercent,
         totalReturnPct: totalGainPercent,
-        avgBuyNative,
         quoteCurrency,
       }
     })

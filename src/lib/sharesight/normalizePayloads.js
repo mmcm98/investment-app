@@ -590,7 +590,6 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     (capitalGain != null && payoutGain != null ? capitalGain + payoutGain : capitalGain)
   const capitalGainPercent = coerceNumber(Reflect.get(v, 'capital_gain_percent') ?? Reflect.get(v, 'gain_loss_percent'))
   const totalGainPercent = coerceNumber(Reflect.get(v, 'total_gain_percent'))
-  const averagePurchasePrice = coerceNumber(Reflect.get(v, 'average_purchase_price'))
   const marketCode = sharesightMarketCodeFromHolding(v)
   const exchangeDisplay = marketCode ? sharesightMarketDisplayLabel(marketCode) : ''
   const currency = coerceString(
@@ -622,7 +621,6 @@ export function applyValuationHoldingToSharesightRow(row, valHolding) {
     value: Reflect.get(v, 'value'),
     cost_basis: Reflect.get(v, 'cost_basis'),
     purchase_price: Reflect.get(v, 'purchase_price'),
-    average_purchase_price: averagePurchasePrice,
     total_cost: Reflect.get(v, 'total_cost'),
     capital_gain: Reflect.get(v, 'capital_gain'),
     gain_loss: Reflect.get(v, 'gain_loss'),

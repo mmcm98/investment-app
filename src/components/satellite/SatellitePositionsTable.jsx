@@ -52,17 +52,13 @@ function groupSortRank(group) {
 function subtotalMetrics(rows) {
   let value = 0
   let gain = 0
-  let cost = 0
   for (const r of rows) {
     const va = numFin(r.valueAud)
     const cg = numFin(r.capitalGainAud)
-    const co = numFin(r.costBasis)
     if (va != null) value += va
     if (cg != null) gain += cg
-    if (co != null) cost += co
   }
-  const ret = cost > 0 && Number.isFinite(gain) ? (gain / cost) * 100 : null
-  return { value, gain, ret }
+  return { value, gain }
 }
 
 const STORAGE_COLUMNS = 'satellitePositionsTable.columnOrder.v1'
@@ -80,7 +76,6 @@ const DEFAULT_COLUMNS = /** @type {const} */ ([
   { id: 'score', label: 'Score', removable: true },
   { id: 'cur', label: 'Cur', removable: true },
   { id: 'price', label: 'Price', removable: true, align: 'right' },
-  { id: 'avgBuy', label: 'Avg buy', removable: true, align: 'right' },
   { id: 'qty', label: 'Qty', removable: true, align: 'right' },
   { id: 'valueAud', label: 'Value (AUD)', removable: true, align: 'right' },
   { id: 'costBasis', label: 'Cost basis', removable: true, align: 'right' },
@@ -195,7 +190,6 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
     return {
       portfolioValue: t.value,
       capitalGain: t.gain,
-      totalReturnPct: t.ret,
     }
   }, [openRows])
 
@@ -313,8 +307,6 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
           return cur || '—'
         case 'price':
           return fmtNative(native, cur)
-        case 'avgBuy':
-          return fmtNative(numFin(row.avgBuyNative), 'AUD')
         case 'qty':
           return fmtNum(numFin(row.quantity))
         case 'valueAud':
@@ -361,10 +353,6 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
             >
               {fmtAud(summary.capitalGain)}
             </div>
-          </div>
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-[#505068]">Total return</span>
-            <div className="mt-0.5 text-sm">{fmtPct(summary.totalReturnPct)}</div>
           </div>
         </div>
       </div>
@@ -415,7 +403,7 @@ export function SatellitePositionsTable({ tableCards, onTypeChange }) {
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118]">
-        <table className="w-full min-w-[1720px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1620px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[rgba(255,255,255,0.08)] text-[10px] font-semibold uppercase tracking-wide text-[#505068]">
               {visibleColumns.map((col) => (
