@@ -5,9 +5,17 @@ function text(value) {
 
 /** @param {string} textBody */
 function parseJsonFromModel(textBody) {
-  let body = `${textBody ?? ''}`.trim()
-  if (body.startsWith('```')) body = body.replace(/^```[a-zA-Z]*\n?/, '').replace(/```\s*$/, '')
-  return JSON.parse(body)
+  let text = `${textBody ?? ''}`.trim()
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end === -1) {
+    throw new Error('Model response did not contain valid JSON')
+  }
+
+  text = text.slice(start, end + 1)
+  return JSON.parse(text)
 }
 
 /** @param {unknown} raw */
@@ -75,7 +83,7 @@ async function fetchGeminiResearch(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 1000, temperature: 0.3 },
+      generationConfig: { maxOutputTokens: 2000, temperature: 0.2 },
     }),
   })
   console.log('[direct-triad] response status:', res.status, 'url:', url)
@@ -89,6 +97,7 @@ async function fetchGeminiResearch(prompt) {
   const data = JSON.parse(text)
 
   const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  console.log('[direct-triad] raw Gemini text:', textOut.slice(0, 500))
   return parseJsonFromModel(textOut)
 }
 
