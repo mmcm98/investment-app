@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
-import { getTriadAnalysisJob, startTriadAnalysis } from '../lib/analysis/triadClient.js'
+import { runDirectTriadAnalysis } from '../lib/analysis/directTriadAnalysis.js'
 
 const TABS = /** @type {const} */ ([
   { id: 'scorecard', label: 'Scorecard' },
@@ -81,22 +81,6 @@ function EmptyState({ children }) {
   )
 }
 
-function analysisProgressMessage(elapsedSeconds) {
-  if (elapsedSeconds < 20) return 'Gathering research with Gemini...'
-  if (elapsedSeconds < 60) return 'Synthesising scorecard with Claude...'
-  return 'Finalising results...'
-}
-
-function analysisStatusMessage(status, elapsedSeconds) {
-  if (status === 'gemini_complete') return 'Synthesising scorecard with Claude...'
-  if (status === 'pending') return 'Gathering research with Gemini...'
-  return analysisProgressMessage(elapsedSeconds)
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 export function SatellitePositionAnalysis() {
   const params = useParams()
   const navigate = useNavigate()
@@ -135,7 +119,7 @@ export function SatellitePositionAnalysis() {
   const awaitingAnalysis = Boolean(row?.awaitingAnalysis || !hasScorecard)
   const overallScore = numFin(scorecard?.overall_score ?? row?.overallScore)
   const framework = `${scorecard?.framework ?? row?.assetClass ?? '—'}`.trim() || '—'
-  const tier = `${scorecard?.tier ?? row?.tier ?? '—'}`.trim() || '—'
+  const tier = `${scorecard?.tier_label ?? scorecard?.tier ?? row?.tier ?? '—'}`.trim() || '—'
   const generatedAt = asText(research?.generated_at ?? research?.date_generated ?? research?.created_at)
   const modelUsed = asText(research?.model ?? research?.models ?? research?.gemini_model ?? research?.claude_model)
   const markdown = asText(research?.markdown ?? research?.body_md ?? research?.content)
@@ -143,77 +127,35 @@ export function SatellitePositionAnalysis() {
   const runDisabled = analysisPhase === 'running' || !runHoldingId
 
   async function runAnalysis() {
-    console.log('[analysis-start] holdingId:', runHoldingId)
-    if (!supabase || !runHoldingId) return
+    if (!supabase || !runHoldingId || !row) return
 
     setAnalysisPhase('running')
     setAnalysisElapsed(0)
-    setAnalysisMessage(analysisProgressMessage(0))
+    setAnalysisMessage('Starting analysis...')
 
-    /** @type {ReturnType<typeof setInterval> | null} */
-    let timer = null
+    const started = Date.now()
+    const timer = setInterval(() => {
+      setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
+    }, 1000)
+
     try {
-      const { data, error } = await supabase.auth.getSession()
-      if (error) throw error
+      const result = await runDirectTriadAnalysis(supabase, {
+        row,
+        holdingId: runHoldingId,
+        onProgress: (message) => setAnalysisMessage(message),
+      })
 
-      const token = data.session?.access_token
-      if (!token) throw new Error('Not signed in.')
-
-      const started = Date.now()
-      timer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - started) / 1000)
-        setAnalysisElapsed(elapsed)
-        setAnalysisMessage(analysisProgressMessage(elapsed))
-      }, 1000)
-
-      const start = await startTriadAnalysis({ holdingId: runHoldingId }, { accessToken: token })
-      console.log('[triad-start-response] ok:', start?.ok, 'status:', start?.status)
-      const { job_id } = start
-      if (!job_id) throw new Error('No job_id returned from triad-start')
-
-      while (Date.now() - started < 180_000) {
-        await sleep(3000)
-        let status
-        try {
-          status = await getTriadAnalysisJob(job_id, { accessToken: token })
-          console.log('[poll-result]', JSON.stringify(status))
-        } catch (pollErr) {
-          console.log('[poll-error]', typeof pollErr, pollErr?.message, pollErr)
-          throw pollErr
-        }
-        const job = status && typeof status === 'object' ? Reflect.get(status, 'job') : null
-        const jobObj = job && typeof job === 'object' ? /** @type {Record<string, unknown>} */ (job) : null
-        const state = `${jobObj?.status ?? ''}`
-        const elapsed = Math.floor((Date.now() - started) / 1000)
-
-        setAnalysisElapsed(elapsed)
-        setAnalysisMessage(analysisStatusMessage(state, elapsed))
-
-        if (state === 'complete') {
-          if (timer) clearInterval(timer)
-          timer = null
-          const result = jobObj?.result && typeof jobObj.result === 'object' ? /** @type {Record<string, unknown>} */ (jobObj.result) : {}
-          setAnalysisPhase('done')
-          setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
-          setAnalysisMessage(
-            `Analysis complete. Version ${Reflect.get(result, 'version_number') ?? '—'} created with overall score ${Reflect.get(result, 'overall_score') ?? '—'}%.`,
-          )
-          await sp.refresh?.()
-          return
-        }
-
-        if (state === 'failed') {
-          throw new Error(`${jobObj?.error ?? 'Analysis failed.'}`)
-        }
-      }
-
-      throw new Error('Analysis timed out after 180 seconds. Try again.')
+      setAnalysisPhase('done')
+      setAnalysisMessage(
+        `Analysis complete. Version ${result.version_number ?? '—'} created with overall score ${result.overall_score ?? '—'}%.`,
+      )
+      await sp.refresh?.()
     } catch (error) {
-      if (timer) clearInterval(timer)
       setAnalysisPhase('error')
-      const errorValue = error?.message || String(error) || 'Unknown error'
-      console.log('[analysis-error]', typeof errorValue, errorValue)
-      setAnalysisMessage(errorValue)
+      setAnalysisMessage(error?.message || String(error) || 'Unknown error')
+    } finally {
+      clearInterval(timer)
+      setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
     }
   }
 
