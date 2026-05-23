@@ -15,7 +15,12 @@ function parseJsonFromModel(textBody) {
   }
 
   text = text.slice(start, end + 1)
-  return JSON.parse(text)
+  try {
+    return JSON.parse(text)
+  } catch {
+    console.log('[direct-triad] FAILED to parse JSON. Raw text:', text)
+    throw new Error('Model response did not contain valid JSON')
+  }
 }
 
 /** @param {unknown} raw */
@@ -36,6 +41,7 @@ function frameworkKeyFromRecommendation(raw) {
  */
 function buildGeminiPrompt(ticker, company, exchange) {
   return `Research ${ticker} (${company}) listed on ${exchange}.
+Keep all field values concise — 1-2 sentences maximum. Do not exceed 1500 total tokens. Return ONLY valid JSON, no markdown fences.
 Return ONLY a JSON object with these exact fields, no other text:
 {
   "ticker": "${ticker}",
@@ -61,6 +67,7 @@ Return ONLY a JSON object with these exact fields, no other text:
 function buildClaudePrompt(geminiJson) {
   return [
     'Using the Gemini research JSON below, return ONLY one valid JSON object. No markdown, no prose.',
+    'Return ONLY valid JSON, no markdown fences, no prose. The research_paper field should be detailed but stay under 6000 tokens.',
     'Schema:',
     '{"framework":"string","overall_score":0-100,"tier":1-5,"tier_label":"string"}',
     'framework should be a human-readable framework name aligned with Gemini recommended_framework.',
@@ -83,7 +90,7 @@ async function fetchGeminiResearch(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 2000, temperature: 0.2 },
+      generationConfig: { maxOutputTokens: 4000, temperature: 0.2 },
     }),
   })
   console.log('[direct-triad] response status:', res.status, 'url:', url)
@@ -114,7 +121,7 @@ async function fetchClaudeScorecard(prompt) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 8000,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
