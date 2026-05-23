@@ -6,7 +6,7 @@ import { useSharesightIntegration } from '../context/SharesightIntegrationContex
 
 import { useInvTheme } from '../context/InvThemeContext.jsx'
 
-import { AddTickerCombobox } from '../components/satellite/AddTickerCombobox.jsx'
+import { WatchlistAddTicker } from '../components/watchlist/WatchlistAddTicker.jsx'
 
 import { DataStaleBanner } from '../components/ui/DataStaleBanner.jsx'
 
@@ -577,12 +577,12 @@ export function WatchlistPage() {
         <h1 className="text-[22px] font-semibold">Watchlist</h1>
 
         <p className={`max-w-[78ch] text-sm ${theme.muted}`}>
-          Track pre-position ideas with the same FMP combobox as Satellite. When you buy and the holding appears in Sharesight, rows promote
+          Search FMP to lock symbol and exchange, then add candidates. When you buy and the holding appears in Sharesight, rows promote
           automatically after sync.
         </p>
       </div>
 
-      <AddTickerCombobox target="watchlist" onCreated={reload} />
+      <WatchlistAddTicker onCreated={reload} />
 
       <div className="flex flex-wrap gap-3 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-4 py-3 font-mono text-[11px] text-[#C8C8D8]">
         <span>

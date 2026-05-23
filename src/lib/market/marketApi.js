@@ -43,6 +43,51 @@ export async function postTickerSearch(query, limit = 15) {
 }
 
 /**
+ * Direct FMP search from the browser (watchlist typeahead).
+ *
+ * @param {string} query
+ * @param {number} [limit]
+ * @returns {Promise<{ symbol: string, name: string, exchangeShortName: string, currency: string|null }[]>}
+ */
+export async function fetchFmpTickerSearch(query, limit = 10) {
+  const key = `${import.meta.env.VITE_FMP_API_KEY ?? ''}`.trim()
+  if (!key) throw new Error('VITE_FMP_API_KEY is not configured.')
+
+  const q = `${query ?? ''}`.trim()
+  if (!q) return []
+
+  const url = `https://financialmodelingprep.com/api/v3/search?query=${encodeURIComponent(q)}&limit=${limit}&apikey=${encodeURIComponent(key)}`
+  const res = await fetch(url, { headers: { Accept: 'application/json' } })
+  const json = await res.json()
+
+  if (!res.ok) {
+    throw new Error(`FMP search failed (${res.status}): ${JSON.stringify(json).slice(0, 200)}`)
+  }
+
+  const rawList = Array.isArray(json) ? json : []
+  /** @type {{ symbol: string, name: string, exchangeShortName: string, currency: string|null }[]} */
+  const results = []
+
+  for (const row of rawList) {
+    if (!row || typeof row !== 'object') continue
+    const o = /** @type {Record<string, unknown>} */ (row)
+    const symbol = `${Reflect.get(o, 'symbol') ?? Reflect.get(o, 'ticker') ?? ''}`.trim().toUpperCase()
+    const name = `${Reflect.get(o, 'name') ?? Reflect.get(o, 'companyName') ?? ''}`.trim()
+    const exchangeShortName =
+      `${Reflect.get(o, 'stockExchangeShortName') ?? Reflect.get(o, 'exchangeShortName') ?? Reflect.get(o, 'exchange') ?? ''}`
+        .trim()
+        .toUpperCase() || 'UNKNOWN'
+    const curRaw = Reflect.get(o, 'currency')
+    const currency = typeof curRaw === 'string' && curRaw.trim() ? curRaw.trim().toUpperCase() : null
+    if (!symbol || !name) continue
+    results.push({ symbol, name, exchangeShortName, currency })
+    if (results.length >= limit) break
+  }
+
+  return results
+}
+
+/**
  * @param {string} symbol Yahoo symbol e.g. VGS.AX
  * @param {'1M'|'3M'|'6M'|'1Y'|'2Y'|'ALL'} [preset]
  */
