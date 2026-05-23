@@ -69,6 +69,7 @@ async function fetchGeminiResearch(prompt) {
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured.')
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+  console.log('[direct-triad] calling:', url)
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -77,9 +78,15 @@ async function fetchGeminiResearch(prompt) {
       generationConfig: { maxOutputTokens: 1000, temperature: 0.3 },
     }),
   })
+  console.log('[direct-triad] response status:', res.status, 'url:', url)
 
-  const data = await res.json()
-  if (!res.ok) throw new Error(`Gemini failed (${res.status}): ${JSON.stringify(data)}`)
+  const text = await res.text()
+  if (!res.ok) {
+    console.log('[direct-triad] error response body:', text)
+    throw new Error(`Gemini failed (${res.status}): ${text}`)
+  }
+
+  const data = JSON.parse(text)
 
   const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
   return parseJsonFromModel(textOut)
@@ -92,7 +99,9 @@ async function fetchClaudeScorecard(prompt) {
   const apiKey = `${import.meta.env.VITE_ANTHROPIC_API_KEY ?? ''}`.trim()
   if (!apiKey) throw new Error('VITE_ANTHROPIC_API_KEY is not configured.')
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = 'https://api.anthropic.com/v1/messages'
+  console.log('[direct-triad] calling:', url)
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -105,9 +114,15 @@ async function fetchClaudeScorecard(prompt) {
       messages: [{ role: 'user', content: prompt }],
     }),
   })
+  console.log('[direct-triad] response status:', res.status, 'url:', url)
 
-  const data = await res.json()
-  if (!res.ok) throw new Error(`Claude failed (${res.status}): ${JSON.stringify(data)}`)
+  const text = await res.text()
+  if (!res.ok) {
+    console.log('[direct-triad] error response body:', text)
+    throw new Error(`Claude failed (${res.status}): ${text}`)
+  }
+
+  const data = JSON.parse(text)
 
   const textOut =
     data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
