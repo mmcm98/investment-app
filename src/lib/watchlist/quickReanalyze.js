@@ -1,15 +1,17 @@
-import { postTriadAnalysis } from '../analysis/triadClient.js'
+import { runDirectTriadAnalysis } from '../analysis/directTriadAnalysis.js'
 
 /**
- * Claude suggest + run scoring for watchlist instruments (Gemini reused per triad caches).
+ * Claude suggest + run scoring for watchlist instruments (Gemini cache via research_logs).
  *
- * @param {{ accessToken: string }} session
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} watchlistItemId
  */
-
-export async function runWatchlistFullReanalysis(session, watchlistItemId) {
+export async function runWatchlistFullReanalysis(supabase, watchlistItemId) {
   const suggest = /** @type {Record<string, unknown>} */ (
-    await postTriadAnalysis({ step: 'suggest-framework', watchlistItemId }, session)
+    await runDirectTriadAnalysis(supabase, {
+      watchlistItemId,
+      step: 'suggest-framework',
+    })
   )
 
   if (suggest.ok !== true) throw new Error('Framework suggestion failed')
@@ -22,5 +24,9 @@ export async function runWatchlistFullReanalysis(session, watchlistItemId) {
 
   if (!fk) throw new Error('Missing suggested framework')
 
-  return postTriadAnalysis({ step: 'run-analysis', watchlistItemId, confirmedFrameworkKey: fk }, session)
+  return runDirectTriadAnalysis(supabase, {
+    watchlistItemId,
+    step: 'run-analysis',
+    confirmedFrameworkKey: fk,
+  })
 }

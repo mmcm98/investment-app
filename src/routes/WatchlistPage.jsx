@@ -523,11 +523,7 @@ export function WatchlistPage() {
 
       if (error) throw error
 
-      const sess = await sessionAccess()
-
-      if (!sess) throw new Error('Not signed in')
-
-      await runWatchlistFullReanalysis(sess, wid)
+      await runWatchlistFullReanalysis(supabase, wid)
 
       reload()
     } catch (e) {

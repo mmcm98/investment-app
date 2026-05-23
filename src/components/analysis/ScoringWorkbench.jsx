@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useSharesightIntegration } from '../../context/SharesightIntegrationContext.jsx'
-import { postTriadAnalysis } from '../../lib/analysis/triadClient.js'
+import { runDirectTriadAnalysis } from '../../lib/analysis/directTriadAnalysis.js'
 import { ScoreRing } from './ScoreRing.jsx'
 
 /** @param {Record<string, unknown>|null} p */
@@ -84,16 +84,6 @@ export function ScoringWorkbench({
   const [overrideMap, setOverrideMap] = useState(/** @type {Record<string, number>} */ ({}))
   const [analysisProgressPct, setAnalysisProgressPct] = useState(0)
 
-  const fetchSession = useCallback(async () => {
-    if (!supabase) return null
-
-    const { data, error } = await supabase.auth.getSession()
-
-    if (error || !data.session?.access_token) return null
-
-    return { accessToken: data.session.access_token }
-  }, [supabase])
-
   const loadOverrides = useCallback(async () => {
     await Promise.resolve()
 
@@ -141,9 +131,7 @@ export function ScoringWorkbench({
     setErrorText(null)
     setPhase('suggesting')
 
-    const sess = await fetchSession()
-
-    if (!sess) {
+    if (!supabase) {
       setPhase('error')
       setErrorText('Not signed in.')
 
@@ -151,12 +139,12 @@ export function ScoringWorkbench({
     }
 
     try {
-      const payload =
-        positionId != null && `${positionId}`.trim()
-          ? { step: 'suggest-framework', positionId: `${positionId}`.trim() }
-          : { step: 'suggest-framework', watchlistItemId: `${watchlistItemId ?? ''}`.trim() }
-
-      const out = await postTriadAnalysis(payload, sess)
+      const out = await runDirectTriadAnalysis(supabase, {
+        step: 'suggest-framework',
+        ...(positionId != null && `${positionId}`.trim()
+          ? { positionId: `${positionId}`.trim() }
+          : { watchlistItemId: `${watchlistItemId ?? ''}`.trim() }),
+      })
 
       if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
         throw new Error('Unexpected suggest response')
@@ -170,7 +158,7 @@ export function ScoringWorkbench({
       setPhase('error')
       setErrorText(e instanceof Error ? e.message : String(e))
     }
-  }, [fetchSession, positionId, watchlistItemId])
+  }, [supabase, positionId, watchlistItemId])
 
   useEffect(() => {
     const needsSuggest = Boolean(position) && (versionManifest.length === 0 || awaiting)
@@ -203,9 +191,7 @@ export function ScoringWorkbench({
       setAnalysisProgressPct(0)
       setPhase('running')
 
-      const sess = await fetchSession()
-
-      if (!sess) {
+      if (!supabase) {
         setPhase('error')
         setErrorText('Not signed in.')
 
@@ -213,20 +199,13 @@ export function ScoringWorkbench({
       }
 
       try {
-        const runPayload =
-          positionId != null && `${positionId}`.trim()
-            ? {
-                step: 'run-analysis',
-                positionId: `${positionId}`.trim(),
-                confirmedFrameworkKey: frameworkKey,
-              }
-            : {
-                step: 'run-analysis',
-                watchlistItemId: `${watchlistItemId ?? ''}`.trim(),
-                confirmedFrameworkKey: frameworkKey,
-              }
-
-        const out = await postTriadAnalysis(runPayload, sess)
+        const out = await runDirectTriadAnalysis(supabase, {
+          step: 'run-analysis',
+          confirmedFrameworkKey: frameworkKey,
+          ...(positionId != null && `${positionId}`.trim()
+            ? { positionId: `${positionId}`.trim() }
+            : { watchlistItemId: `${watchlistItemId ?? ''}`.trim() }),
+        })
 
         if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
           throw new Error('Analysis did not complete')
@@ -240,7 +219,7 @@ export function ScoringWorkbench({
         setErrorText(e instanceof Error ? e.message : String(e))
       }
     },
-    [fetchSession, positionId, watchlistItemId, refreshDetail],
+    [supabase, positionId, watchlistItemId, refreshDetail],
   )
 
   const suggestedKey = suggestion && typeof rz(suggestion, 'framework_key') === 'string' ? String(rz(suggestion, 'framework_key')) : ''
