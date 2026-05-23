@@ -4,6 +4,7 @@
  * Run `npm run dev:analysis-api` before Vite dev; vite proxies `/api/analysis/triad` → `/analysis/triad`.
  */
 import http from 'node:http'
+import anthropicProxyHandler from '../api/anthropic-proxy.js'
 import triadHandler from '../api/analysis/triad.js'
 import watchlistFlashHandler from '../api/analysis/watchlistFlash.js'
 import portfolioBriefingHandler from '../api/analysis/portfolio-briefing.js'
@@ -20,6 +21,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = `${req.url ?? ''}`
+
+  if (url.startsWith('/anthropic-proxy')) {
+    await anthropicProxyHandler(req, res)
+
+    return
+  }
 
   if (url.startsWith('/analysis/triad')) {
     await triadHandler(req, res)
@@ -46,6 +53,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.warn(
-    `[dev-analysis-api] http://127.0.0.1:${PORT} — /analysis/triad · /analysis/watchlist-flash · /analysis/portfolio-briefing`,
+    `[dev-analysis-api] http://127.0.0.1:${PORT} — /anthropic-proxy · /analysis/triad · /analysis/watchlist-flash · /analysis/portfolio-briefing`,
   )
 })

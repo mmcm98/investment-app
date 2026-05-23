@@ -96,16 +96,11 @@ async function fetchGeminiResearch(prompt) {
  * @param {string} prompt
  */
 async function fetchClaudeScorecard(prompt) {
-  const apiKey = `${import.meta.env.VITE_ANTHROPIC_API_KEY ?? ''}`.trim()
-  if (!apiKey) throw new Error('VITE_ANTHROPIC_API_KEY is not configured.')
-
-  const url = 'https://api.anthropic.com/v1/messages'
+  const url = '/api/anthropic-proxy'
   console.log('[direct-triad] calling:', url)
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
     body: JSON.stringify({
