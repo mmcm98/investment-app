@@ -56,7 +56,7 @@ export async function fetchFmpTickerSearch(query, limit = 10) {
   const q = `${query ?? ''}`.trim()
   if (!q) return []
 
-  const url = `https://financialmodelingprep.com/api/v3/search?query=${encodeURIComponent(q)}&limit=${limit}&apikey=${encodeURIComponent(key)}`
+  const url = `https://financialmodelingprep.com/stable/search-symbol?query=${encodeURIComponent(q)}&limit=${limit}&apikey=${encodeURIComponent(key)}`
   const res = await fetch(url, { headers: { Accept: 'application/json' } })
   const json = await res.json()
 
@@ -64,7 +64,11 @@ export async function fetchFmpTickerSearch(query, limit = 10) {
     throw new Error(`FMP search failed (${res.status}): ${JSON.stringify(json).slice(0, 200)}`)
   }
 
-  const rawList = Array.isArray(json) ? json : []
+  const rawList = Array.isArray(json)
+    ? json
+    : json && typeof json === 'object' && Array.isArray(Reflect.get(json, 'data'))
+      ? Reflect.get(json, 'data')
+      : []
   /** @type {{ symbol: string, name: string, exchangeShortName: string, currency: string|null }[]} */
   const results = []
 
@@ -74,7 +78,15 @@ export async function fetchFmpTickerSearch(query, limit = 10) {
     const symbol = `${Reflect.get(o, 'symbol') ?? Reflect.get(o, 'ticker') ?? ''}`.trim().toUpperCase()
     const name = `${Reflect.get(o, 'name') ?? Reflect.get(o, 'companyName') ?? ''}`.trim()
     const exchangeShortName =
-      `${Reflect.get(o, 'stockExchangeShortName') ?? Reflect.get(o, 'exchangeShortName') ?? Reflect.get(o, 'exchange') ?? ''}`
+      `${
+        Reflect.get(o, 'stockExchangeShortName') ??
+        Reflect.get(o, 'exchangeShortName') ??
+        Reflect.get(o, 'exchange_short_name') ??
+        Reflect.get(o, 'stock_exchange_short_name') ??
+        Reflect.get(o, 'exchange') ??
+        Reflect.get(o, 'stock_exchange') ??
+        ''
+      }`
         .trim()
         .toUpperCase() || 'UNKNOWN'
     const curRaw = Reflect.get(o, 'currency')
