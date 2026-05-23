@@ -1,3 +1,7 @@
+export const config = {
+  maxDuration: 300,
+}
+
 function readNodeEnv() {
   return typeof process !== 'undefined' && process.env ? process.env : {}
 }

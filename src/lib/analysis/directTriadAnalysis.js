@@ -1,3 +1,17 @@
+import { buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
+
+const GEMINI_MODEL = 'gemini-2.5-pro'
+const CLAUDE_MODEL = 'claude-sonnet-4-6'
+const MAX_OUTPUT_TOKENS = 32000
+
+const VALID_FRAMEWORK_KEYS = [
+  'regular_stocks',
+  'thematic_etfs',
+  'fund_managers_lic',
+  'speculative',
+  'alternatives_pe',
+]
+
 /** @param {unknown} value */
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : ''
@@ -51,46 +65,143 @@ function frameworkLabelForKey(key) {
   return m[/** @type {keyof typeof m} */ (key)] ?? key
 }
 
-/**
- * @param {string} ticker
- * @param {string} company
- * @param {string} exchange
- */
-function buildGeminiPrompt(ticker, company, exchange) {
-  return `Research ${ticker} (${company}) listed on ${exchange}.
-Keep all field values concise — 1-2 sentences maximum. Do not exceed 1500 total tokens. Return ONLY valid JSON, no markdown fences.
-Return ONLY a JSON object with these exact fields, no other text:
-{
-  "ticker": "${ticker}",
-  "company": "${company}",
-  "research_date": "${new Date().toISOString().split('T')[0]}",
-  "thesis_summary": "2-3 sentences",
-  "competitive_moat": "1 sentence",
-  "financials_commentary": "1 sentence",
-  "key_risks": ["risk1", "risk2", "risk3"],
-  "recent_developments": "1 sentence",
-  "management_quality": "1 sentence",
-  "growth_runway": "1 sentence",
-  "valuation_commentary": "1 sentence",
-  "technical_summary": "1 sentence",
-  "sentiment": "positive | neutral | negative",
-  "recommended_framework": "Regular Stock | Thematic ETF | Fund Manager / LIC | Speculative Stock | Alternative / PE"
-}`
+/** @param {string} raw */
+function slugSectionId(raw) {
+  return text(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+}
+
+/** @param {number} stars @param {number} maxStars */
+function starsToScorePct(stars, maxStars) {
+  if (!Number.isFinite(stars) || !Number.isFinite(maxStars) || maxStars <= 0) return 0
+  return Math.round((stars / maxStars) * 100)
 }
 
 /**
- * @param {Record<string, unknown>} geminiJson
+ * @param {Record<string, unknown>} claudeJson
+ * @param {string} frameworkKey
  */
-function buildClaudePrompt(geminiJson) {
-  return [
-    'Using the Gemini research JSON below, return ONLY one valid JSON object. No markdown, no prose.',
-    'Return ONLY valid JSON, no markdown fences, no prose. The research_paper field should be detailed but stay under 6000 tokens.',
-    'Schema:',
-    '{"framework":"string","overall_score":0-100,"tier":1-5,"tier_label":"string"}',
-    'framework should be a human-readable framework name aligned with Gemini recommended_framework.',
-    'overall_score is 0-100. tier is 1-5 where higher is stronger conviction.',
-    `Gemini JSON:\n${JSON.stringify(geminiJson)}`,
-  ].join('\n\n')
+function normalizeScorecardItems(claudeJson, frameworkKey) {
+  const starsMax = frameworkKey === 'regular_stocks' ? 5 : 4
+
+  if (Array.isArray(claudeJson.items) && claudeJson.items.length > 0) {
+    return /** @type {Record<string, unknown>[]} */ (claudeJson.items).map((raw, idx) => {
+      const it = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : {}
+      const awarded = Number(it.stars_awarded)
+      const max = Number(it.stars_max) || starsMax
+      const sectionId = text(it.section_id) || slugSectionId(it.title) || `section_${idx + 1}`
+      const itemNum = Number(it.item_number) || idx + 1
+      const title = text(it.title) || text(it.item_name) || `Item ${itemNum}`
+      return {
+        item_key: text(it.item_key) || `${sectionId}_${itemNum}`,
+        section_id: sectionId,
+        item_number: itemNum,
+        title,
+        stars_awarded: Number.isFinite(awarded) ? awarded : null,
+        stars_max: max,
+        score_pct: Number.isFinite(Number(it.score_pct)) ? Number(it.score_pct) : starsToScorePct(awarded, max),
+        rationale: text(it.rationale),
+      }
+    })
+  }
+
+  const sections = Array.isArray(claudeJson.sections) ? claudeJson.sections : []
+  /** @type {Record<string, unknown>[]} */
+  const flat = []
+
+  for (const secRaw of sections) {
+    if (!secRaw || typeof secRaw !== 'object') continue
+    const sec = /** @type {Record<string, unknown>} */ (secRaw)
+    const sectionId = slugSectionId(sec.section_name) || `section_${sec.section_number ?? flat.length + 1}`
+    const secItems = Array.isArray(sec.items) ? sec.items : []
+
+    for (const itemRaw of secItems) {
+      if (!itemRaw || typeof itemRaw !== 'object') continue
+      const it = /** @type {Record<string, unknown>} */ (itemRaw)
+      const awarded = Number(it.stars_awarded)
+      const max = Number(it.stars_max) || starsMax
+      const itemNum = Number(it.item_number) || flat.length + 1
+      const title = text(it.item_name) || text(it.title) || `Item ${itemNum}`
+      flat.push({
+        item_key: `${sectionId}_${itemNum}`,
+        section_id: sectionId,
+        item_number: itemNum,
+        title,
+        stars_awarded: Number.isFinite(awarded) ? awarded : null,
+        stars_max: max,
+        score_pct: Number.isFinite(Number(it.score_pct)) ? Number(it.score_pct) : starsToScorePct(awarded, max),
+        rationale: text(it.rationale),
+      })
+    }
+  }
+
+  return flat
+}
+
+/**
+ * @param {Record<string, unknown>} claudeJson
+ */
+function normalizeSectionScores(claudeJson) {
+  if (Array.isArray(claudeJson.section_scores) && claudeJson.section_scores.length > 0) {
+    return /** @type {Record<string, unknown>[]} */ (claudeJson.section_scores)
+  }
+
+  const sections = Array.isArray(claudeJson.sections) ? claudeJson.sections : []
+  return sections
+    .filter((s) => s && typeof s === 'object')
+    .map((secRaw) => {
+      const sec = /** @type {Record<string, unknown>} */ (secRaw)
+      return {
+        section_id: slugSectionId(sec.section_name) || `section_${sec.section_number ?? ''}`,
+        title: text(sec.section_name),
+        weight_pct: Number(sec.weight_pct),
+        score_pct: Number(sec.section_score_pct),
+        notes: text(sec.notes) || '',
+      }
+    })
+}
+
+/**
+ * @param {Record<string, unknown>} claudeJson
+ */
+function buildResearchPaperFromClaude(claudeJson) {
+  const md = text(claudeJson.research_paper_markdown)
+  if (md) return md
+
+  const outline = claudeJson.research_paper_outline
+  if (outline && typeof outline === 'object') {
+    const sections = Reflect.get(outline, 'sections')
+    if (Array.isArray(sections)) {
+      return sections
+        .filter((s) => s && typeof s === 'object')
+        .map((s) => {
+          const o = /** @type {Record<string, unknown>} */ (s)
+          const heading = text(o.heading) || 'Section'
+          const body = text(o.body_md)
+          return `## ${heading}\n\n${body}`
+        })
+        .join('\n\n')
+    }
+  }
+
+  return text(claudeJson.synopsis)
+}
+
+/**
+ * @param {Record<string, unknown>} claudeJson
+ */
+function researchPaperSectionsPayload(claudeJson, fallbackMd) {
+  const outline = claudeJson.research_paper_outline
+  if (outline && typeof outline === 'object') {
+    const sections = Reflect.get(outline, 'sections')
+    if (Array.isArray(sections) && sections.length > 0) {
+      return { sections }
+    }
+  }
+
+  return { sections: [{ heading: 'Research paper', body_md: fallbackMd }] }
 }
 
 /**
@@ -100,14 +211,15 @@ async function fetchGeminiResearch(prompt) {
   const apiKey = `${import.meta.env.VITE_GEMINI_API_KEY ?? ''}`.trim()
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured.')
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`
   console.log('[direct-triad] calling:', url)
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 4000, temperature: 0.2 },
+      tools: [{ google_search: {} }],
+      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
     }),
   })
   console.log('[direct-triad] response status:', res.status, 'url:', url)
@@ -120,7 +232,10 @@ async function fetchGeminiResearch(prompt) {
 
   const data = JSON.parse(text)
 
-  const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  const parts = data?.candidates?.[0]?.content?.parts ?? []
+  const textOut = (Array.isArray(parts) ? parts : [])
+    .map((p) => (p && typeof p === 'object' && 'text' in p ? String(p.text) : ''))
+    .join('\n')
   console.log('[direct-triad] raw Gemini text:', textOut.slice(0, 500))
   return parseJsonFromModel(textOut)
 }
@@ -137,8 +252,8 @@ async function fetchClaudeScorecard(prompt) {
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8000,
+      model: CLAUDE_MODEL,
+      max_tokens: MAX_OUTPUT_TOKENS,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
@@ -220,8 +335,8 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
     return { geminiJson: cached.gemini, researchLogId: cached.id }
   }
 
-  progress('Gathering research with Gemini...')
-  const prompt = buildGeminiPrompt(ticker, company, exchange)
+  progress('Gathering deep research with Gemini Pro (web search)...')
+  const prompt = buildGeminiDeepResearchPrompt(ticker, company, exchange)
   const geminiJson = await fetchGeminiResearch(prompt)
   const researchLogId = await saveGeminiLog(supabase, userId, tickerTag, geminiJson)
   console.log('[direct-triad] Gemini complete')
@@ -234,29 +349,43 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
  * @param {string} frameworkKey
  */
 function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey) {
-  const overallScore = Number(claudeJson.overall_score)
+  const overallScore = Number(claudeJson.overall_score ?? claudeJson.overall_score_pct)
   const frameworkLabel =
-    text(claudeJson.framework) || text(/** @type {Record<string, unknown>} */ (geminiJson).recommended_framework)
+    text(claudeJson.framework) || frameworkLabelForKey(frameworkKey) || text(/** @type {Record<string, unknown>} */ (geminiJson).recommended_framework)
   const tier = claudeJson.tier
   const tierLabel = text(claudeJson.tier_label)
+  const synopsis = text(claudeJson.synopsis) || text(claudeJson.synopsis_one_liner)
+  const items = normalizeScorecardItems(claudeJson, frameworkKey)
+  const sectionScores = normalizeSectionScores(claudeJson)
+  const buyZones = Array.isArray(claudeJson.buy_zones_native) ? claudeJson.buy_zones_native : []
+  const exitTriggers = Array.isArray(claudeJson.exit_triggers) ? claudeJson.exit_triggers : []
+  const researchMd = buildResearchPaperFromClaude(claudeJson)
 
   const scorecardForUi = {
     framework: frameworkLabel || frameworkKey,
+    framework_key: frameworkKey,
     overall_score: Number.isFinite(overallScore) ? overallScore : null,
+    overall_score_pct: Number.isFinite(overallScore) ? overallScore : null,
     tier,
     tier_label: tierLabel,
+    synopsis_one_liner: text(claudeJson.synopsis_one_liner) || synopsis,
+    items,
+    section_scores: sectionScores,
+    buy_zones_native: buyZones,
+    exit_triggers: exitTriggers,
     gemini_research: geminiJson,
   }
 
   const researchPaper = {
     generated_at: new Date().toISOString(),
-    gemini_model: 'gemini-2.5-flash',
-    claude_model: 'claude-sonnet-4-6',
-    markdown: text(/** @type {Record<string, unknown>} */ (geminiJson).thesis_summary),
-    body_md: text(/** @type {Record<string, unknown>} */ (geminiJson).thesis_summary),
+    gemini_model: GEMINI_MODEL,
+    claude_model: CLAUDE_MODEL,
+    markdown: researchMd,
+    body_md: researchMd,
+    outline: researchPaperSectionsPayload(claudeJson, researchMd),
   }
 
-  return { overallScore, frameworkLabel, scorecardForUi, researchPaper }
+  return { overallScore, frameworkLabel, scorecardForUi, researchPaper, buyZones, exitTriggers, researchPaperPayload: researchPaperSectionsPayload(claudeJson, researchMd) }
 }
 
 /**
@@ -442,14 +571,32 @@ async function resolveAnalysisTarget(supabase, userId, args) {
 function buildFrameworkSuggestion(geminiJson) {
   const g = /** @type {Record<string, unknown>} */ (geminiJson && typeof geminiJson === 'object' ? geminiJson : {})
   const frameworkKey = frameworkKeyFromRecommendation(g.recommended_framework)
+  const reason =
+    text(g.business_overview)?.slice(0, 500) ||
+    text(g.competitive_moat)?.slice(0, 400) ||
+    'Suggested from Gemini deep research (recommended_framework).'
   return {
     ok: true,
     suggestion: {
       framework_key: frameworkKey,
       framework_label: frameworkLabelForKey(frameworkKey),
-      reason: text(g.thesis_summary) || 'Suggested from Gemini recommended_framework.',
+      reason,
     },
   }
+}
+
+/** @param {string} confirmedKey @param {Record<string, unknown>} claudeJson @param {unknown} geminiJson */
+function resolveFrameworkKey(confirmedKey, claudeJson, geminiJson) {
+  if (confirmedKey && VALID_FRAMEWORK_KEYS.includes(confirmedKey)) return confirmedKey
+  if (confirmedKey) {
+    const mapped = frameworkKeyFromRecommendation(confirmedKey)
+    if (VALID_FRAMEWORK_KEYS.includes(mapped)) return mapped
+  }
+  const fromClaude = normalizeFrameworkKey(claudeJson.framework_key ?? claudeJson.framework)
+  if (VALID_FRAMEWORK_KEYS.includes(fromClaude)) return fromClaude
+  return frameworkKeyFromRecommendation(
+    claudeJson.framework ?? /** @type {Record<string, unknown>} */ (geminiJson).recommended_framework,
+  )
 }
 
 /**
@@ -471,8 +618,11 @@ async function persistScorecardVersion(
   scorecardForUi,
   claudeJson,
   researchPaper,
+  researchPaperPayload,
   overallScore,
   researchLogId,
+  buyZones,
+  exitTriggers,
 ) {
   const parentFilter =
     target.kind === 'watchlist'
@@ -517,7 +667,7 @@ async function persistScorecardVersion(
   await supabase.from('research_paper_versions').insert({
     user_id: userId,
     scorecard_version_id: scRow.id,
-    payload: { sections: [{ heading: 'Thesis', body_md: researchPaper.markdown }] },
+    payload: researchPaperPayload,
     generated_at: new Date().toISOString(),
   })
 
@@ -537,6 +687,8 @@ async function persistScorecardVersion(
     .from(table)
     .update({
       awaiting_analysis: false,
+      buy_zones: buyZones,
+      exit_triggers: exitTriggers,
       extra: prevExtra,
       updated_at: new Date().toISOString(),
     })
@@ -595,24 +747,36 @@ export async function runDirectTriadAnalysis(supabase, args) {
     return buildFrameworkSuggestion(geminiJson)
   }
 
-  progress('Synthesising scorecard with Claude...')
-  const claudeJson = await fetchClaudeScorecard(buildClaudePrompt(/** @type {Record<string, unknown>} */ (geminiJson)))
-  console.log('[direct-triad] Claude complete')
-
   const confirmedKey = normalizeFrameworkKey(args.confirmedFrameworkKey)
   const frameworkKey =
-    confirmedKey && confirmedKey !== 'unknown'
-      ? frameworkKeyFromRecommendation(confirmedKey)
-      : frameworkKeyFromRecommendation(
-          /** @type {Record<string, unknown>} */ (claudeJson).framework ??
-            /** @type {Record<string, unknown>} */ (geminiJson).recommended_framework,
+    step === 'run-analysis' && confirmedKey && confirmedKey !== 'unknown'
+      ? resolveFrameworkKey(confirmedKey, {}, /** @type {Record<string, unknown>} */ (geminiJson))
+      : resolveFrameworkKey(
+          '',
+          {},
+          /** @type {Record<string, unknown>} */ (geminiJson),
         )
 
-  const { overallScore, frameworkLabel, scorecardForUi, researchPaper } = buildScorecardArtifacts(
-    geminiJson,
-    claudeJson,
-    frameworkKey,
+  progress('Synthesising item-level scorecard with Claude...')
+  const claudeJson = await fetchClaudeScorecard(
+    buildClaudeScorecardPrompt(
+      frameworkKey,
+      frameworkLabelForKey(frameworkKey),
+      target.ticker,
+      target.company,
+      /** @type {Record<string, unknown>} */ (geminiJson),
+    ),
   )
+  console.log('[direct-triad] Claude complete')
+
+  const resolvedFrameworkKey = resolveFrameworkKey(
+    confirmedKey,
+    /** @type {Record<string, unknown>} */ (claudeJson),
+    geminiJson,
+  )
+
+  const { overallScore, frameworkLabel, scorecardForUi, researchPaper, buyZones, exitTriggers, researchPaperPayload } =
+    buildScorecardArtifacts(geminiJson, claudeJson, resolvedFrameworkKey)
 
   if (target.kind === 'holding') {
     progress('Saving results...')
@@ -638,7 +802,7 @@ export async function runDirectTriadAnalysis(supabase, args) {
         user_id: userId,
         position_id: position.id,
         version_number: versionNumber,
-        framework: frameworkKey,
+        framework: resolvedFrameworkKey,
         overall_score: Number.isFinite(overallScore) ? overallScore : null,
         payload: { ...scorecardForUi, claude: claudeJson },
         generated_at: new Date().toISOString(),
@@ -650,7 +814,7 @@ export async function runDirectTriadAnalysis(supabase, args) {
     await supabase.from('research_paper_versions').insert({
       user_id: userId,
       scorecard_version_id: scRow.id,
-      payload: { sections: [{ heading: 'Thesis', body_md: researchPaper.markdown }] },
+      payload: researchPaperPayload,
       generated_at: new Date().toISOString(),
     })
 
@@ -669,6 +833,8 @@ export async function runDirectTriadAnalysis(supabase, args) {
       .from('positions')
       .update({
         awaiting_analysis: false,
+        buy_zones: buyZones,
+        exit_triggers: exitTriggers,
         extra: nextExtra,
         updated_at: new Date().toISOString(),
       })
@@ -693,12 +859,15 @@ export async function runDirectTriadAnalysis(supabase, args) {
     supabase,
     userId,
     target,
-    frameworkKey,
+    resolvedFrameworkKey,
     scorecardForUi,
     claudeJson,
     researchPaper,
+    researchPaperPayload,
     overallScore,
     researchLogId,
+    buyZones,
+    exitTriggers,
   )
 
   return {
