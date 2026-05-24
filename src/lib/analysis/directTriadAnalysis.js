@@ -214,45 +214,33 @@ async function fetchGeminiResearch(prompt) {
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured.')
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`
-  console.log('[direct-triad] calling:', url)
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     tools: [{ google_search: {} }],
     generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
   }
-  console.log('[direct-triad] Gemini request body:', JSON.stringify(body).slice(0, 2000))
   const geminiStart = Date.now()
-  console.log('[direct-triad] Gemini START at:', new Date().toISOString())
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  console.log('[direct-triad] response status:', res.status, 'url:', url)
 
   const text = await res.text()
   const geminiDuration = Date.now() - geminiStart
   console.log('[direct-triad] Gemini DURATION ms:', geminiDuration)
-  console.log('[direct-triad] Gemini raw text length:', text.length)
-  console.log('[direct-triad] Gemini raw text first 500:', text.slice(0, 500))
   if (!res.ok) {
-    console.log('[direct-triad] error response body:', text)
     throw new Error(`Gemini failed (${res.status}): ${text}`)
   }
 
   const data = JSON.parse(text)
 
   console.log('[direct-triad] Gemini groundingMetadata present:', !!data?.candidates?.[0]?.groundingMetadata)
-  console.log(
-    '[direct-triad] Gemini search queries used:',
-    data?.candidates?.[0]?.groundingMetadata?.searchEntryPoint || 'none',
-  )
 
   const parts = data?.candidates?.[0]?.content?.parts ?? []
   const textOut = (Array.isArray(parts) ? parts : [])
     .map((p) => (p && typeof p === 'object' && 'text' in p ? String(p.text) : ''))
     .join('\n')
-  console.log('[direct-triad] raw Gemini text:', textOut.slice(0, 500))
   return parseJsonFromModel(textOut)
 }
 
@@ -261,13 +249,11 @@ async function fetchGeminiResearch(prompt) {
  */
 async function fetchClaudeScorecard(prompt) {
   const url = '/api/anthropic-proxy'
-  console.log('[direct-triad] calling:', url)
   const body = {
     model: CLAUDE_MODEL,
-    max_tokens: 16000,
+    max_tokens: 32000,
     messages: [{ role: 'user', content: prompt }],
   }
-  console.log('[direct-triad] Claude request body length:', JSON.stringify(body).length)
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -275,14 +261,10 @@ async function fetchClaudeScorecard(prompt) {
     },
     body: JSON.stringify(body),
   })
-  console.log('[direct-triad] response status:', res.status, 'url:', url)
 
   const text = await res.text()
   console.log('[direct-triad] Claude raw text length:', text.length)
-  console.log('[direct-triad] Claude raw text first 1000:', text.slice(0, 1000))
   if (!res.ok) {
-    console.error('[direct-triad] Claude response status:', res.status, res.statusText)
-    console.log('[direct-triad] error response body:', text)
     throw new Error(`Claude failed (${res.status}): ${text}`)
   }
 
@@ -367,9 +349,7 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
   const prompt = buildGeminiDeepResearchPrompt(ticker, company, exchange)
   const geminiJson = await fetchGeminiResearch(prompt)
   console.log('[direct-triad] Gemini complete')
-  console.log('[direct-triad] post-Gemini: about to save to research_logs')
   const researchLogId = await saveGeminiLog(supabase, userId, tickerTag, geminiJson)
-  console.log('[direct-triad] post-Gemini: saved to research_logs')
   return { geminiJson, researchLogId }
 }
 
@@ -764,7 +744,6 @@ export async function runDirectTriadAnalysis(supabase, args) {
     const target = await resolveAnalysisTarget(supabase, userId, args)
     const step = args.step ?? 'run-analysis'
 
-    console.log('[direct-triad] step: obtaining Gemini JSON')
     const { geminiJson, researchLogId } = await obtainGeminiJson(
       supabase,
       userId,
@@ -773,10 +752,6 @@ export async function runDirectTriadAnalysis(supabase, args) {
       target.company,
       target.exchange,
       progress,
-    )
-    console.log(
-      '[direct-triad] step: Gemini JSON obtained, keys:',
-      Object.keys(/** @type {Record<string, unknown>} */ (geminiJson && typeof geminiJson === 'object' ? geminiJson : {})),
     )
 
     if (step === 'suggest-framework') {
@@ -794,7 +769,6 @@ export async function runDirectTriadAnalysis(supabase, args) {
           )
 
     progress('Synthesising item-level scorecard with Claude...')
-    console.log('[direct-triad] step: building Claude prompt')
     const claudePrompt = buildClaudeScorecardPrompt(
       frameworkKey,
       frameworkLabelForKey(frameworkKey),
@@ -802,9 +776,7 @@ export async function runDirectTriadAnalysis(supabase, args) {
       target.company,
       /** @type {Record<string, unknown>} */ (geminiJson),
     )
-    console.log('[direct-triad] step: calling Claude')
     const claudeJson = await fetchClaudeScorecard(claudePrompt)
-    console.log('[direct-triad] Claude complete')
 
   const resolvedFrameworkKey = resolveFrameworkKey(
     confirmedKey,
