@@ -204,6 +204,65 @@ async function fetchGeminiResearch(prompt) {
 }
 
 /**
+ * @param {Response} res
+ * @returns {Promise<{ fullText: string, stopReason: string|null, usage: Record<string, unknown>|null }>}
+ */
+async function readAnthropicSseStream(res) {
+  if (!res.body) throw new Error('Claude returned an empty response body.')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullText = ''
+  /** @type {string|null} */
+  let stopReason = null
+  /** @type {Record<string, unknown>|null} */
+  let usage = null
+
+  /** @param {string} line */
+  const consumeSseLine = (line) => {
+    if (!line.startsWith('data: ')) return
+    const data = line.slice(6).trim()
+    if (!data || data === '[DONE]') return
+    try {
+      const event = JSON.parse(data)
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+        fullText += event.delta.text
+      } else if (event.type === 'message_delta') {
+        if (event.delta?.stop_reason) stopReason = event.delta.stop_reason
+        if (event.usage) usage = event.usage
+      } else if (event.type === 'error') {
+        const msg = event.error?.message ?? JSON.stringify(event.error ?? event)
+        throw new Error(`Claude stream error: ${msg}`)
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Claude stream error:')) throw e
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      consumeSseLine(line)
+    }
+  }
+
+  if (buffer.trim()) {
+    for (const line of buffer.split('\n')) {
+      consumeSseLine(line)
+    }
+  }
+
+  return { fullText, stopReason, usage }
+}
+
+/**
  * @param {string} prompt
  */
 async function fetchClaudeScorecard(prompt) {
@@ -211,6 +270,7 @@ async function fetchClaudeScorecard(prompt) {
   const body = {
     model: CLAUDE_MODEL,
     max_tokens: 32000,
+    stream: true,
     messages: [{ role: 'user', content: prompt }],
   }
   const res = await fetch(url, {
@@ -221,20 +281,18 @@ async function fetchClaudeScorecard(prompt) {
     body: JSON.stringify(body),
   })
 
-  const text = await res.text()
-  console.log('[direct-triad] Claude raw text length:', text.length)
   if (!res.ok) {
+    const text = await res.text()
     throw new Error(`Claude failed (${res.status}): ${text}`)
   }
 
-  const data = JSON.parse(text)
+  const { fullText, stopReason, usage } = await readAnthropicSseStream(res)
 
-  console.log('[direct-triad] Claude stop_reason:', data?.stop_reason)
-  console.log('[direct-triad] Claude usage:', JSON.stringify(data?.usage))
+  console.log('[direct-triad] Claude stream complete, length:', fullText.length)
+  console.log('[direct-triad] Claude stop_reason:', stopReason)
+  console.log('[direct-triad] Claude usage:', JSON.stringify(usage))
 
-  const textOut =
-    data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
-  const parsedJson = parseJsonFromModel(textOut)
+  const parsedJson = parseJsonFromModel(fullText)
   console.log('[direct-triad] Claude parsed keys:', Object.keys(parsedJson))
   console.log('[direct-triad] Claude sections count:', parsedJson?.sections?.length)
   console.log('[direct-triad] Claude items count:', parsedJson?.items?.length)
@@ -249,6 +307,7 @@ async function fetchClaudeResearchPaper(prompt) {
   const body = {
     model: CLAUDE_MODEL,
     max_tokens: 16000,
+    stream: true,
     messages: [{ role: 'user', content: prompt }],
   }
   const res = await fetch(url, {
@@ -259,21 +318,19 @@ async function fetchClaudeResearchPaper(prompt) {
     body: JSON.stringify(body),
   })
 
-  const text = await res.text()
-  console.log('[direct-triad] Claude raw text length:', text.length)
   if (!res.ok) {
+    const text = await res.text()
     console.error('[direct-triad] Claude response status:', res.status, res.statusText)
     throw new Error(`Claude failed (${res.status}): ${text}`)
   }
 
-  const data = JSON.parse(text)
+  const { fullText, stopReason, usage } = await readAnthropicSseStream(res)
 
-  console.log('[direct-triad] Claude stop_reason:', data?.stop_reason)
-  console.log('[direct-triad] Claude usage:', JSON.stringify(data?.usage))
+  console.log('[direct-triad] Claude stream complete, length:', fullText.length)
+  console.log('[direct-triad] Claude stop_reason:', stopReason)
+  console.log('[direct-triad] Claude usage:', JSON.stringify(usage))
 
-  const textOut =
-    data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
-  return `${textOut ?? ''}`.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+  return `${fullText ?? ''}`.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
 }
 
 /**
