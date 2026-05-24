@@ -3,7 +3,7 @@ export const FRAMEWORK_RULES_FOR_CLAUDE = `
 ## Universal rules
 - Buy zone unlock when overall score ≥ 65%. Below 65%: 0.5× allocation haircut; buy zones locked until score clears gate.
 - High conviction ≥ 78% where applicable per framework.
-- Score every checklist item with 3-5 sentence rationale citing specific numbers, dates, and sources from Gemini research.
+- Score every checklist item with 1-2 sentence rationale citing 1-2 specific data points.
 - Output valid JSON only — no markdown fences around the outer object.
 
 ## Framework 1 — Regular Stocks (60 items, 1-5 stars per item)
@@ -163,7 +163,7 @@ ${JSON.stringify(geminiJson)}
 
 INSTRUCTIONS:
 1. Score every single item in the ${frameworkLabel} framework (${itemCount} items total).
-2. For each item provide: item_number, item_name (exact framework wording), stars_awarded (1-${starsMax}), rationale (3-5 sentences citing SPECIFIC numbers, percentages, dates, sources from Gemini research).
+2. For each item provide: item_number, item_name (exact framework wording), stars_awarded (1-${starsMax}), rationale (1-2 sentences citing 1-2 specific data points (numbers, percentages, dates). Keep concise — the scorecard is a quick-reference; depth goes in the investment thesis).
 3. Group items into sections matching the framework table with correct weights.
 4. Calculate weighted section_score_pct and overall_score (0-100).
 5. Assign tier (1-5) and tier_label using this framework's tier thresholds.
@@ -196,7 +196,7 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
           "stars_awarded": number,
           "stars_max": ${starsMax},
           "score_pct": 0-100,
-          "rationale": "3-5 sentences with cited evidence"
+          "rationale": "1-2 sentences with 1-2 cited data points"
         }
       ]
     }
@@ -210,7 +210,7 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
       "stars_awarded": number,
       "stars_max": ${starsMax},
       "score_pct": 0-100,
-      "rationale": "3-5 sentences"
+      "rationale": "1-2 sentences"
     }
   ],
   "section_scores": [
