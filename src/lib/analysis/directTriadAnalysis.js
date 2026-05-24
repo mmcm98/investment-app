@@ -32,7 +32,9 @@ function parseJsonFromModel(textBody) {
   try {
     return JSON.parse(text)
   } catch {
-    console.log('[direct-triad] FAILED to parse JSON. Raw text:', text)
+    console.log('[direct-triad] FAILED to parse JSON. First 500:', text.slice(0, 500))
+    console.log('[direct-triad] FAILED to parse JSON. Last 500:', text.slice(-500))
+    console.log('[direct-triad] FAILED to parse JSON. Total length:', text.length)
     throw new Error('Model response did not contain valid JSON')
   }
 }
@@ -219,6 +221,8 @@ async function fetchGeminiResearch(prompt) {
     generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
   }
   console.log('[direct-triad] Gemini request body:', JSON.stringify(body).slice(0, 2000))
+  const geminiStart = Date.now()
+  console.log('[direct-triad] Gemini START at:', new Date().toISOString())
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -227,6 +231,8 @@ async function fetchGeminiResearch(prompt) {
   console.log('[direct-triad] response status:', res.status, 'url:', url)
 
   const text = await res.text()
+  const geminiDuration = Date.now() - geminiStart
+  console.log('[direct-triad] Gemini DURATION ms:', geminiDuration)
   console.log('[direct-triad] Gemini raw text length:', text.length)
   console.log('[direct-triad] Gemini raw text first 500:', text.slice(0, 500))
   if (!res.ok) {
@@ -235,6 +241,12 @@ async function fetchGeminiResearch(prompt) {
   }
 
   const data = JSON.parse(text)
+
+  console.log('[direct-triad] Gemini groundingMetadata present:', !!data?.candidates?.[0]?.groundingMetadata)
+  console.log(
+    '[direct-triad] Gemini search queries used:',
+    data?.candidates?.[0]?.groundingMetadata?.searchEntryPoint || 'none',
+  )
 
   const parts = data?.candidates?.[0]?.content?.parts ?? []
   const textOut = (Array.isArray(parts) ? parts : [])
@@ -275,6 +287,9 @@ async function fetchClaudeScorecard(prompt) {
   }
 
   const data = JSON.parse(text)
+
+  console.log('[direct-triad] Claude stop_reason:', data?.stop_reason)
+  console.log('[direct-triad] Claude usage:', JSON.stringify(data?.usage))
 
   const textOut =
     data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
