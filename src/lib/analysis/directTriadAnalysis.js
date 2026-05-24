@@ -213,18 +213,22 @@ async function fetchGeminiResearch(prompt) {
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`
   console.log('[direct-triad] calling:', url)
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
+  }
+  console.log('[direct-triad] Gemini request body:', JSON.stringify(body).slice(0, 2000))
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      tools: [{ google_search: {} }],
-      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
-    }),
+    body: JSON.stringify(body),
   })
   console.log('[direct-triad] response status:', res.status, 'url:', url)
 
   const text = await res.text()
+  console.log('[direct-triad] Gemini raw text length:', text.length)
+  console.log('[direct-triad] Gemini raw text first 500:', text.slice(0, 500))
   if (!res.ok) {
     console.log('[direct-triad] error response body:', text)
     throw new Error(`Gemini failed (${res.status}): ${text}`)
@@ -246,20 +250,24 @@ async function fetchGeminiResearch(prompt) {
 async function fetchClaudeScorecard(prompt) {
   const url = '/api/anthropic-proxy'
   console.log('[direct-triad] calling:', url)
+  const body = {
+    model: CLAUDE_MODEL,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    messages: [{ role: 'user', content: prompt }],
+  }
+  console.log('[direct-triad] Claude request body length:', JSON.stringify(body).length)
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    body: JSON.stringify(body),
   })
   console.log('[direct-triad] response status:', res.status, 'url:', url)
 
   const text = await res.text()
+  console.log('[direct-triad] Claude raw text length:', text.length)
+  console.log('[direct-triad] Claude raw text first 1000:', text.slice(0, 1000))
   if (!res.ok) {
     console.log('[direct-triad] error response body:', text)
     throw new Error(`Claude failed (${res.status}): ${text}`)
@@ -269,7 +277,11 @@ async function fetchClaudeScorecard(prompt) {
 
   const textOut =
     data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
-  return parseJsonFromModel(textOut)
+  const parsedJson = parseJsonFromModel(textOut)
+  console.log('[direct-triad] Claude parsed keys:', Object.keys(parsedJson))
+  console.log('[direct-triad] Claude sections count:', parsedJson?.sections?.length)
+  console.log('[direct-triad] Claude items count:', parsedJson?.items?.length)
+  return parsedJson
 }
 
 /**
