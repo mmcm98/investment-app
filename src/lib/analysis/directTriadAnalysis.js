@@ -252,7 +252,7 @@ async function fetchClaudeScorecard(prompt) {
   console.log('[direct-triad] calling:', url)
   const body = {
     model: CLAUDE_MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: 8000,
     messages: [{ role: 'user', content: prompt }],
   }
   console.log('[direct-triad] Claude request body length:', JSON.stringify(body).length)
@@ -269,6 +269,7 @@ async function fetchClaudeScorecard(prompt) {
   console.log('[direct-triad] Claude raw text length:', text.length)
   console.log('[direct-triad] Claude raw text first 1000:', text.slice(0, 1000))
   if (!res.ok) {
+    console.error('[direct-triad] Claude response status:', res.status, res.statusText)
     console.log('[direct-triad] error response body:', text)
     throw new Error(`Claude failed (${res.status}): ${text}`)
   }
