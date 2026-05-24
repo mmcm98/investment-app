@@ -1,4 +1,4 @@
-import { buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
+import { buildClaudeResearchPaperPrompt, buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
 
 const GEMINI_MODEL = 'gemini-2.5-pro'
 const CLAUDE_MODEL = 'claude-sonnet-4-6'
@@ -166,47 +166,6 @@ function normalizeSectionScores(claudeJson) {
 }
 
 /**
- * @param {Record<string, unknown>} claudeJson
- */
-function buildResearchPaperFromClaude(claudeJson) {
-  const md = text(claudeJson.research_paper_markdown)
-  if (md) return md
-
-  const outline = claudeJson.research_paper_outline
-  if (outline && typeof outline === 'object') {
-    const sections = Reflect.get(outline, 'sections')
-    if (Array.isArray(sections)) {
-      return sections
-        .filter((s) => s && typeof s === 'object')
-        .map((s) => {
-          const o = /** @type {Record<string, unknown>} */ (s)
-          const heading = text(o.heading) || 'Section'
-          const body = text(o.body_md)
-          return `## ${heading}\n\n${body}`
-        })
-        .join('\n\n')
-    }
-  }
-
-  return text(claudeJson.synopsis)
-}
-
-/**
- * @param {Record<string, unknown>} claudeJson
- */
-function researchPaperSectionsPayload(claudeJson, fallbackMd) {
-  const outline = claudeJson.research_paper_outline
-  if (outline && typeof outline === 'object') {
-    const sections = Reflect.get(outline, 'sections')
-    if (Array.isArray(sections) && sections.length > 0) {
-      return { sections }
-    }
-  }
-
-  return { sections: [{ heading: 'Research paper', body_md: fallbackMd }] }
-}
-
-/**
  * @param {string} prompt
  */
 async function fetchGeminiResearch(prompt) {
@@ -283,6 +242,41 @@ async function fetchClaudeScorecard(prompt) {
 }
 
 /**
+ * @param {string} prompt
+ */
+async function fetchClaudeResearchPaper(prompt) {
+  const url = '/api/anthropic-proxy'
+  const body = {
+    model: CLAUDE_MODEL,
+    max_tokens: 16000,
+    messages: [{ role: 'user', content: prompt }],
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  const text = await res.text()
+  console.log('[direct-triad] Claude raw text length:', text.length)
+  if (!res.ok) {
+    console.error('[direct-triad] Claude response status:', res.status, res.statusText)
+    throw new Error(`Claude failed (${res.status}): ${text}`)
+  }
+
+  const data = JSON.parse(text)
+
+  console.log('[direct-triad] Claude stop_reason:', data?.stop_reason)
+  console.log('[direct-triad] Claude usage:', JSON.stringify(data?.usage))
+
+  const textOut =
+    data?.content?.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? ''
+  return `${textOut ?? ''}`.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} userId
  * @param {string} tickerTag
@@ -335,8 +329,7 @@ async function saveGeminiLog(supabase, userId, tickerTag, geminiJson) {
  * @param {string} exchange
  * @param {(message: string) => void} progress
  */
-async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, exchange, progress) {
-  progress('Checking Gemini cache...')
+async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, exchange, progress, { cacheOnly = false } = {}) {
   const cached = await loadCachedGemini(supabase, userId, tickerTag)
   const cacheHit = Boolean(cached)
   console.log('[direct-triad] cache check:', cacheHit ? 'HIT' : 'MISS')
@@ -345,7 +338,11 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
     return { geminiJson: cached.gemini, researchLogId: cached.id }
   }
 
-  progress('Gathering deep research with Gemini Pro (web search)...')
+  if (cacheOnly) {
+    throw new Error('No cached Gemini research found. Run scorecard analysis first.')
+  }
+
+  progress('Researching with Gemini Pro...')
   const prompt = buildGeminiDeepResearchPrompt(ticker, company, exchange)
   const geminiJson = await fetchGeminiResearch(prompt)
   console.log('[direct-triad] Gemini complete')
@@ -369,7 +366,6 @@ function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey) {
   const sectionScores = normalizeSectionScores(claudeJson)
   const buyZones = Array.isArray(claudeJson.buy_zones_native) ? claudeJson.buy_zones_native : []
   const exitTriggers = Array.isArray(claudeJson.exit_triggers) ? claudeJson.exit_triggers : []
-  const researchMd = buildResearchPaperFromClaude(claudeJson)
 
   const scorecardForUi = {
     framework: frameworkLabel || frameworkKey,
@@ -386,16 +382,7 @@ function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey) {
     gemini_research: geminiJson,
   }
 
-  const researchPaper = {
-    generated_at: new Date().toISOString(),
-    gemini_model: GEMINI_MODEL,
-    claude_model: CLAUDE_MODEL,
-    markdown: researchMd,
-    body_md: researchMd,
-    outline: researchPaperSectionsPayload(claudeJson, researchMd),
-  }
-
-  return { overallScore, frameworkLabel, scorecardForUi, researchPaper, buyZones, exitTriggers, researchPaperPayload: researchPaperSectionsPayload(claudeJson, researchMd) }
+  return { overallScore, frameworkLabel, scorecardForUi, buyZones, exitTriggers }
 }
 
 /**
@@ -616,9 +603,10 @@ function resolveFrameworkKey(confirmedKey, claudeJson, geminiJson) {
  * @param {string} frameworkKey
  * @param {Record<string, unknown>} scorecardForUi
  * @param {Record<string, unknown>} claudeJson
- * @param {Record<string, unknown>} researchPaper
  * @param {number} overallScore
  * @param {string|undefined} researchLogId
+ * @param {unknown} buyZones
+ * @param {unknown} exitTriggers
  */
 async function persistScorecardVersion(
   supabase,
@@ -627,8 +615,6 @@ async function persistScorecardVersion(
   frameworkKey,
   scorecardForUi,
   claudeJson,
-  researchPaper,
-  researchPaperPayload,
   overallScore,
   researchLogId,
   buyZones,
@@ -674,23 +660,16 @@ async function persistScorecardVersion(
   const { data: scRow, error: scErr } = await supabase.from('scorecard_versions').insert(insertRow).select('id').single()
   if (scErr) throw scErr
 
-  await supabase.from('research_paper_versions').insert({
-    user_id: userId,
-    scorecard_version_id: scRow.id,
-    payload: researchPaperPayload,
-    generated_at: new Date().toISOString(),
-  })
-
   const parentRow = target.parentRow ?? {}
   const prevExtra =
     parentRow.extra && typeof parentRow.extra === 'object'
       ? { .../** @type {Record<string, unknown>} */ (parentRow.extra) }
       : {}
 
-  const synopsis = researchPaper.markdown
+  const synopsis = text(scorecardForUi.synopsis_one_liner)
   if (synopsis) prevExtra.synopsis = synopsis
   prevExtra.scorecard = scorecardForUi
-  prevExtra.research_paper = researchPaper
+  delete prevExtra.research_paper
 
   const table = target.kind === 'watchlist' ? 'watchlist_items' : 'positions'
   const { error: updErr } = await supabase
@@ -711,7 +690,165 @@ async function persistScorecardVersion(
     await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
   }
 
-  return versionNumber
+  return { versionNumber, scorecardVersionId: scRow.id }
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} userId
+ * @param {AnalysisTarget} target
+ */
+async function loadLatestScorecardVersion(supabase, userId, target) {
+  if (target.kind === 'holding') {
+    const holding = target.holding
+    if (!holding) throw new Error('Holding not found.')
+    const position = await ensurePositionForHolding(supabase, holding, userId, target.exchange)
+    const { data, error } = await supabase
+      .from('scorecard_versions')
+      .select('id, payload, framework, overall_score, version_number')
+      .eq('user_id', userId)
+      .eq('position_id', position.id)
+      .order('version_number', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    if (!data) throw new Error('No scorecard found. Run analysis first.')
+    return { scorecardVersionId: data.id, scorecardJson: data.payload ?? data, positionId: position.id, parentRow: position }
+  }
+
+  const parentFilter =
+    target.kind === 'watchlist'
+      ? { column: 'watchlist_item_id', value: target.parentId }
+      : { column: 'position_id', value: target.parentId }
+
+  const { data, error } = await supabase
+    .from('scorecard_versions')
+    .select('id, payload, framework, overall_score, version_number')
+    .eq('user_id', userId)
+    .eq(parentFilter.column, parentFilter.value)
+    .order('version_number', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw error
+  if (!data) throw new Error('No scorecard found. Run analysis first.')
+
+  return {
+    scorecardVersionId: data.id,
+    scorecardJson: data.payload ?? data,
+    positionId: target.kind === 'position' ? target.parentId : null,
+    parentRow: target.parentRow,
+  }
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} userId
+ * @param {AnalysisTarget} target
+ * @param {string} scorecardVersionId
+ * @param {string} markdown
+ */
+async function persistResearchPaper(supabase, userId, target, scorecardVersionId, markdown) {
+  const generatedAt = new Date().toISOString()
+  const researchPaper = {
+    generated_at: generatedAt,
+    gemini_model: GEMINI_MODEL,
+    claude_model: CLAUDE_MODEL,
+    markdown,
+    body_md: markdown,
+  }
+  const payload = { sections: [{ heading: 'Investment thesis', body_md: markdown }] }
+
+  const { data: existing } = await supabase
+    .from('research_paper_versions')
+    .select('id')
+    .eq('scorecard_version_id', scorecardVersionId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (existing?.id) {
+    await supabase
+      .from('research_paper_versions')
+      .update({ payload, generated_at: generatedAt })
+      .eq('id', existing.id)
+      .eq('user_id', userId)
+  } else {
+    await supabase.from('research_paper_versions').insert({
+      user_id: userId,
+      scorecard_version_id: scorecardVersionId,
+      payload,
+      generated_at: generatedAt,
+    })
+  }
+
+  if (target.kind === 'holding') {
+    const holding = target.holding
+    if (!holding) throw new Error('Holding not found.')
+    const position = await ensurePositionForHolding(supabase, holding, userId, target.exchange)
+    const prevExtra =
+      position.extra && typeof position.extra === 'object'
+        ? { .../** @type {Record<string, unknown>} */ (position.extra) }
+        : {}
+    prevExtra.research_paper = researchPaper
+    await supabase
+      .from('positions')
+      .update({ extra: prevExtra, updated_at: generatedAt })
+      .eq('id', position.id)
+      .eq('user_id', userId)
+    return
+  }
+
+  const parentRow = target.parentRow ?? {}
+  const prevExtra =
+    parentRow.extra && typeof parentRow.extra === 'object'
+      ? { .../** @type {Record<string, unknown>} */ (parentRow.extra) }
+      : {}
+  prevExtra.research_paper = researchPaper
+
+  const table = target.kind === 'watchlist' ? 'watchlist_items' : 'positions'
+  await supabase
+    .from(table)
+    .update({ extra: prevExtra, updated_at: generatedAt })
+    .eq('id', target.parentId)
+    .eq('user_id', userId)
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} userId
+ * @param {AnalysisTarget} target
+ * @param {(message: string) => void} progress
+ */
+async function runGenerateThesis(supabase, userId, target, progress) {
+  const { geminiJson } = await obtainGeminiJson(
+    supabase,
+    userId,
+    target.tickerTag,
+    target.ticker,
+    target.company,
+    target.exchange,
+    progress,
+    { cacheOnly: true },
+  )
+
+  const { scorecardVersionId, scorecardJson } = await loadLatestScorecardVersion(supabase, userId, target)
+
+  progress('Writing investment thesis with Claude...')
+  const markdown = await fetchClaudeResearchPaper(
+    buildClaudeResearchPaperPrompt(
+      target.ticker,
+      target.company,
+      /** @type {Record<string, unknown>} */ (geminiJson),
+      /** @type {Record<string, unknown>} */ (scorecardJson && typeof scorecardJson === 'object' ? scorecardJson : {}),
+    ),
+  )
+
+  if (!markdown) throw new Error('Claude returned an empty research paper.')
+
+  progress('Saving research paper...')
+  await persistResearchPaper(supabase, userId, target, scorecardVersionId, markdown)
+
+  return { ok: true, generated_at: new Date().toISOString() }
 }
 
 /**
@@ -721,7 +858,7 @@ async function persistScorecardVersion(
  *   holdingId?: string,
  *   watchlistItemId?: string,
  *   positionId?: string,
- *   step?: 'suggest-framework' | 'run-analysis',
+ *   step?: 'suggest-framework' | 'run-analysis' | 'generate-thesis',
  *   confirmedFrameworkKey?: string,
  *   onProgress?: (message: string) => void,
  * }} args
@@ -743,6 +880,10 @@ export async function runDirectTriadAnalysis(supabase, args) {
 
     const target = await resolveAnalysisTarget(supabase, userId, args)
     const step = args.step ?? 'run-analysis'
+
+    if (step === 'generate-thesis') {
+      return runGenerateThesis(supabase, userId, target, progress)
+    }
 
     const { geminiJson, researchLogId } = await obtainGeminiJson(
       supabase,
@@ -768,7 +909,7 @@ export async function runDirectTriadAnalysis(supabase, args) {
             /** @type {Record<string, unknown>} */ (geminiJson),
           )
 
-    progress('Synthesising item-level scorecard with Claude...')
+    progress('Synthesising scorecard...')
     const claudePrompt = buildClaudeScorecardPrompt(
       frameworkKey,
       frameworkLabelForKey(frameworkKey),
@@ -778,36 +919,37 @@ export async function runDirectTriadAnalysis(supabase, args) {
     )
     const claudeJson = await fetchClaudeScorecard(claudePrompt)
 
-  const resolvedFrameworkKey = resolveFrameworkKey(
-    confirmedKey,
-    /** @type {Record<string, unknown>} */ (claudeJson),
-    geminiJson,
-  )
+    const resolvedFrameworkKey = resolveFrameworkKey(
+      confirmedKey,
+      /** @type {Record<string, unknown>} */ (claudeJson),
+      geminiJson,
+    )
 
-  const { overallScore, frameworkLabel, scorecardForUi, researchPaper, buyZones, exitTriggers, researchPaperPayload } =
-    buildScorecardArtifacts(geminiJson, claudeJson, resolvedFrameworkKey)
+    const { overallScore, frameworkLabel, scorecardForUi, buyZones, exitTriggers } = buildScorecardArtifacts(
+      geminiJson,
+      claudeJson,
+      resolvedFrameworkKey,
+    )
 
-  if (target.kind === 'holding') {
-    progress('Saving results...')
-    const holding = target.holding
-    if (!holding) throw new Error('Holding not found.')
+    if (target.kind === 'holding') {
+      progress('Saving results...')
+      const holding = target.holding
+      if (!holding) throw new Error('Holding not found.')
 
-    const position = await ensurePositionForHolding(supabase, holding, userId, target.exchange)
+      const position = await ensurePositionForHolding(supabase, holding, userId, target.exchange)
 
-    const { data: maxRow } = await supabase
-      .from('scorecard_versions')
-      .select('version_number')
-      .eq('user_id', userId)
-      .eq('position_id', position.id)
-      .order('version_number', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+      const { data: maxRow } = await supabase
+        .from('scorecard_versions')
+        .select('version_number')
+        .eq('user_id', userId)
+        .eq('position_id', position.id)
+        .order('version_number', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-    const versionNumber = Number.isFinite(Number(maxRow?.version_number)) ? Number(maxRow.version_number) + 1 : 1
+      const versionNumber = Number.isFinite(Number(maxRow?.version_number)) ? Number(maxRow.version_number) + 1 : 1
 
-    const { data: scRow, error: scErr } = await supabase
-      .from('scorecard_versions')
-      .insert({
+      const { error: scErr } = await supabase.from('scorecard_versions').insert({
         user_id: userId,
         position_id: position.id,
         version_number: versionNumber,
@@ -816,43 +958,56 @@ export async function runDirectTriadAnalysis(supabase, args) {
         payload: { ...scorecardForUi, claude: claudeJson },
         generated_at: new Date().toISOString(),
       })
-      .select('id')
-      .single()
-    if (scErr) throw scErr
+      if (scErr) throw scErr
 
-    await supabase.from('research_paper_versions').insert({
-      user_id: userId,
-      scorecard_version_id: scRow.id,
-      payload: researchPaperPayload,
-      generated_at: new Date().toISOString(),
-    })
+      const prevExtra =
+        position.extra && typeof position.extra === 'object'
+          ? { .../** @type {Record<string, unknown>} */ (position.extra) }
+          : {}
 
-    const prevExtra =
-      position.extra && typeof position.extra === 'object'
-        ? { .../** @type {Record<string, unknown>} */ (position.extra) }
-        : {}
+      const synopsis = text(scorecardForUi.synopsis_one_liner)
+      if (synopsis) prevExtra.synopsis = synopsis
+      prevExtra.scorecard = scorecardForUi
+      delete prevExtra.research_paper
 
-    const nextExtra = {
-      ...prevExtra,
-      scorecard: scorecardForUi,
-      research_paper: researchPaper,
+      await supabase
+        .from('positions')
+        .update({
+          awaiting_analysis: false,
+          buy_zones: buyZones,
+          exit_triggers: exitTriggers,
+          extra: prevExtra,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', position.id)
+        .eq('user_id', userId)
+
+      if (researchLogId) {
+        await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
+      }
+
+      return {
+        ok: true,
+        version_number: versionNumber,
+        overall_score: Number.isFinite(overallScore) ? overallScore : null,
+        framework: frameworkLabel,
+        tier: scorecardForUi.tier_label || scorecardForUi.tier,
+      }
     }
 
-    await supabase
-      .from('positions')
-      .update({
-        awaiting_analysis: false,
-        buy_zones: buyZones,
-        exit_triggers: exitTriggers,
-        extra: nextExtra,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', position.id)
-      .eq('user_id', userId)
-
-    if (researchLogId) {
-      await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
-    }
+    progress('Saving results...')
+    const { versionNumber } = await persistScorecardVersion(
+      supabase,
+      userId,
+      target,
+      resolvedFrameworkKey,
+      scorecardForUi,
+      claudeJson,
+      overallScore,
+      researchLogId,
+      buyZones,
+      exitTriggers,
+    )
 
     return {
       ok: true,
@@ -861,31 +1016,6 @@ export async function runDirectTriadAnalysis(supabase, args) {
       framework: frameworkLabel,
       tier: scorecardForUi.tier_label || scorecardForUi.tier,
     }
-  }
-
-  progress('Saving results...')
-  const versionNumber = await persistScorecardVersion(
-    supabase,
-    userId,
-    target,
-    resolvedFrameworkKey,
-    scorecardForUi,
-    claudeJson,
-    researchPaper,
-    researchPaperPayload,
-    overallScore,
-    researchLogId,
-    buyZones,
-    exitTriggers,
-  )
-
-  return {
-    ok: true,
-    version_number: versionNumber,
-    overall_score: Number.isFinite(overallScore) ? overallScore : null,
-    framework: frameworkLabel,
-    tier: scorecardForUi.tier_label || scorecardForUi.tier,
-  }
   } catch (err) {
     console.error('[direct-triad] PIPELINE ERROR:', err?.message, err?.stack)
     throw err

@@ -169,7 +169,7 @@ INSTRUCTIONS:
 5. Assign tier (1-5) and tier_label using this framework's tier thresholds.
 6. Generate up to 3 buy_zones_native with floor_price_native as numbers in listing currency.
 7. Generate up to 5 exit_triggers.
-8. Write research_paper_markdown: 1500-3000 words covering business overview, moat, financials, valuation, risks, outlook.
+8. Do NOT include a research paper or markdown thesis — scorecard JSON only.
 
 Return ONLY a JSON object with this exact structure (no markdown fences):
 
@@ -227,14 +227,37 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
   ],
   "exit_triggers": [
     { "label": "string", "condition_native": "string", "rationale": "string" }
-  ],
-  "research_paper_markdown": "1500-3000 word markdown research paper",
-  "research_paper_outline": {
-    "sections": [
-      { "heading": "string", "body_md": "string" }
-    ]
-  }
+  ]
 }
 
-The flat "items" array must contain all ${itemCount} items with unique item_key values. stars_max must be ${starsMax} for every item.`
+The flat "items" array must contain all ${itemCount} items with unique item_key values. stars_max must be ${starsMax} for every item. Do not include research_paper_markdown or research_paper_outline.`
+}
+
+/**
+ * @param {string} ticker
+ * @param {string} companyName
+ * @param {Record<string, unknown>} geminiJson
+ * @param {Record<string, unknown>} scorecardJson
+ */
+export function buildClaudeResearchPaperPrompt(ticker, companyName, geminiJson, scorecardJson) {
+  return `Using the deep research and scorecard provided, write a comprehensive investment thesis in markdown format (1500-3000 words) covering:
+
+1. Business overview & competitive position
+2. Moat analysis
+3. Financial summary (3-5 year metrics table)
+4. Capital allocation history
+5. Investment thesis
+6. Valuation analysis
+7. Scenario analysis (bull/base/bear with price targets)
+8. Peer comparison
+9. Key risks
+10. Recent developments
+11. Outlook and catalysts
+12. Conclusion and recommendation
+
+DEEP RESEARCH: ${JSON.stringify(geminiJson)}
+
+SCORECARD: ${JSON.stringify(scorecardJson)}
+
+Return ONLY markdown. No JSON wrapper, no code fences, no preamble.`
 }

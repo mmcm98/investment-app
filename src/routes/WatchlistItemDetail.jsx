@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ScoringWorkbench } from '../components/analysis/ScoringWorkbench.jsx'
+import { ResearchPaperTab } from '../components/analysis/ResearchPaperTab.jsx'
 
 import { DetailTabStrip, POSITION_DETAIL_TAB_DEFS } from '../components/detail/DetailTabStrip.jsx'
 
@@ -141,6 +142,13 @@ export function WatchlistItemDetail() {
 
     return ''
   }, [det.watchlistRow, payload, descStr])
+
+  const extraResearch = useMemo(() => {
+    const ex =
+      det.watchlistRow && typeof rz(det.watchlistRow, 'extra') === 'object' ? rz(det.watchlistRow, 'extra') : null
+    const rp = ex && typeof Reflect.get(ex, 'research_paper') === 'object' ? Reflect.get(ex, 'research_paper') : null
+    return rp && typeof rp === 'object' ? /** @type {Record<string, unknown>} */ (rp) : null
+  }, [det.watchlistRow])
 
   const lastAnalyzed = rz(det.scorecardFull, 'generated_at')
 
@@ -343,13 +351,15 @@ export function WatchlistItemDetail() {
         <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] px-5 py-4">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Research paper</p>
 
-          {det.researchFull ? (
-            <pre className="mt-4 max-h-[460px] overflow-auto rounded-lg bg-[#0A0A0F] p-4 font-mono text-[11px] text-[#F0F0F8]">
-              {JSON.stringify(rz(det.researchFull, 'payload') ?? {}, null, 2)}
-            </pre>
-          ) : (
-            <p className="mt-4 text-sm text-[#505068]">{hasScorecard ? 'No research artefact tied to this version.' : 'Awaiting analysis.'}</p>
-          )}
+          <div className="mt-4">
+            <ResearchPaperTab
+              hasScorecard={hasScorecard}
+              researchFull={det.researchFull}
+              extraResearch={extraResearch}
+              watchlistItemId={`${id}`}
+              refreshDetail={det.refreshDetail}
+            />
+          </div>
         </section>
       ) : null}
 

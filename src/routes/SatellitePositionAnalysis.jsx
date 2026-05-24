@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
 import { runDirectTriadAnalysis } from '../lib/analysis/directTriadAnalysis.js'
+import { ResearchPaperTab } from '../components/analysis/ResearchPaperTab.jsx'
 
 const TABS = /** @type {const} */ ([
   { id: 'scorecard', label: 'Scorecard' },
@@ -35,11 +36,6 @@ function getObj(o, key) {
 function getArr(o, key) {
   const v = o && typeof o === 'object' ? Reflect.get(o, key) : null
   return Array.isArray(v) ? v : []
-}
-
-/** @param {unknown} value */
-function asText(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : ''
 }
 
 /** @param {Record<string, unknown>|null|undefined} row */
@@ -120,9 +116,6 @@ export function SatellitePositionAnalysis() {
   const overallScore = numFin(scorecard?.overall_score ?? row?.overallScore)
   const framework = `${scorecard?.framework ?? row?.assetClass ?? '—'}`.trim() || '—'
   const tier = `${scorecard?.tier_label ?? scorecard?.tier ?? row?.tier ?? '—'}`.trim() || '—'
-  const generatedAt = asText(research?.generated_at ?? research?.date_generated ?? research?.created_at)
-  const modelUsed = asText(research?.model ?? research?.models ?? research?.gemini_model ?? research?.claude_model)
-  const markdown = asText(research?.markdown ?? research?.body_md ?? research?.content)
   const runHoldingId = `${row?.holdingId ?? row?.id ?? row?.sharesight_id ?? routeId}`.trim()
   const runDisabled = analysisPhase === 'running' || !runHoldingId
 
@@ -321,19 +314,15 @@ export function SatellitePositionAnalysis() {
       {tab === 'research' ? (
         <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] p-5">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-[#9090A8]">Research Paper</h2>
-          {!research ? (
-            <EmptyState>No research paper yet — click Run Analysis to generate</EmptyState>
-          ) : (
-            <div className="mt-4 space-y-4">
-              <div className="flex flex-wrap gap-4 font-mono text-xs text-[#9090A8]">
-                <span>Date generated: <span className="text-[#F0F0F8]">{generatedAt || '—'}</span></span>
-                <span>Model: <span className="text-[#F0F0F8]">{modelUsed || '—'}</span></span>
-              </div>
-              <article className="whitespace-pre-wrap rounded-lg bg-[#0A0A0F] p-4 text-sm leading-6 text-[#D6D6E8]">
-                {markdown || JSON.stringify(research, null, 2)}
-              </article>
-            </div>
-          )}
+          <div className="mt-4">
+            <ResearchPaperTab
+              hasScorecard={hasScorecard}
+              extraResearch={research}
+              holdingId={runHoldingId}
+              row={row}
+              refreshDetail={() => void sp.refresh?.()}
+            />
+          </div>
         </section>
       ) : null}
 

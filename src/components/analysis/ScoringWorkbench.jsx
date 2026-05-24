@@ -83,6 +83,7 @@ export function ScoringWorkbench({
   const [errorText, setErrorText] = useState(/** @type {string|null} */ (null))
   const [overrideMap, setOverrideMap] = useState(/** @type {Record<string, number>} */ ({}))
   const [analysisProgressPct, setAnalysisProgressPct] = useState(0)
+  const [progressLabel, setProgressLabel] = useState('')
 
   const loadOverrides = useCallback(async () => {
     await Promise.resolve()
@@ -189,6 +190,7 @@ export function ScoringWorkbench({
     async (frameworkKey) => {
       setErrorText(null)
       setAnalysisProgressPct(0)
+      setProgressLabel('Researching with Gemini Pro...')
       setPhase('running')
 
       if (!supabase) {
@@ -205,6 +207,7 @@ export function ScoringWorkbench({
           ...(positionId != null && `${positionId}`.trim()
             ? { positionId: `${positionId}`.trim() }
             : { watchlistItemId: `${watchlistItemId ?? ''}`.trim() }),
+          onProgress: (message) => setProgressLabel(message),
         })
 
         if (!out || typeof out !== 'object' || Reflect.get(out, 'ok') !== true) {
@@ -213,6 +216,7 @@ export function ScoringWorkbench({
 
         setPhase('idle')
         setSuggestion(null)
+        setProgressLabel('')
         refreshDetail()
       } catch (e) {
         setPhase('error')
@@ -235,8 +239,7 @@ export function ScoringWorkbench({
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#505068]">Scoring triad</p>
 
           <p className="mt-2 max-w-[640px] text-sm text-[#9090A8]">
-            Claude scores this position against the active framework using cached Gemini research and an FMP snapshot. Full runs often take about
-            60–120 seconds.
+            Step 1 generates the scorecard only. Use the Research Paper tab to generate the investment thesis separately.
           </p>
         </div>
 
@@ -247,7 +250,9 @@ export function ScoringWorkbench({
 
       {(phase === 'suggesting' || phase === 'running') && (
         <div className="mt-4 space-y-2">
-          <p className="font-mono text-[11px] text-[#79CBFF]">{phase === 'suggesting' ? 'Selecting framework…' : 'Running triad analysis…'}</p>
+          <p className="font-mono text-[11px] text-[#79CBFF]">
+            {phase === 'suggesting' ? 'Selecting framework…' : progressLabel || 'Running scorecard analysis…'}
+          </p>
 
           <div className="h-2 w-full overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
             <motion.div
@@ -260,7 +265,9 @@ export function ScoringWorkbench({
             />
           </div>
 
-          <p className="font-mono text-[10px] text-[#505068]">{phase === 'running' ? 'Expect ~60–120s for Opus synthesis.' : 'Quick Opus routing…'}</p>
+          <p className="font-mono text-[10px] text-[#505068]">
+            {phase === 'running' ? 'Gemini research 60–180s, then Claude scorecard 60–180s.' : 'Quick Opus routing…'}
+          </p>
         </div>
       )}
 
