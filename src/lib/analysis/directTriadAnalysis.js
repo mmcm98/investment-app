@@ -252,7 +252,7 @@ async function fetchClaudeScorecard(prompt) {
   console.log('[direct-triad] calling:', url)
   const body = {
     model: CLAUDE_MODEL,
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [{ role: 'user', content: prompt }],
   }
   console.log('[direct-triad] Claude request body length:', JSON.stringify(body).length)
