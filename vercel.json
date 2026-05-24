@@ -1,9 +1,5 @@
 {
   "functions": {
-    "api/anthropic-proxy.js": {
-      "memory": 1024,
-      "maxDuration": 300
-    },
     "api/market/batch.js": {
       "memory": 1024,
       "maxDuration": 60
