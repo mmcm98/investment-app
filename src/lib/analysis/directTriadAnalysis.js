@@ -366,8 +366,10 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
   progress('Gathering deep research with Gemini Pro (web search)...')
   const prompt = buildGeminiDeepResearchPrompt(ticker, company, exchange)
   const geminiJson = await fetchGeminiResearch(prompt)
-  const researchLogId = await saveGeminiLog(supabase, userId, tickerTag, geminiJson)
   console.log('[direct-triad] Gemini complete')
+  console.log('[direct-triad] post-Gemini: about to save to research_logs')
+  const researchLogId = await saveGeminiLog(supabase, userId, tickerTag, geminiJson)
+  console.log('[direct-triad] post-Gemini: saved to research_logs')
   return { geminiJson, researchLogId }
 }
 
@@ -747,55 +749,62 @@ async function persistScorecardVersion(
 export async function runDirectTriadAnalysis(supabase, args) {
   const progress = (msg) => args.onProgress?.(msg)
 
-  const { data: ud, error: userErr } = await supabase.auth.getUser()
-  if (userErr || !ud?.user?.id) throw userErr ?? new Error('Not signed in.')
-  const userId = ud.user.id
+  try {
+    const { data: ud, error: userErr } = await supabase.auth.getUser()
+    if (userErr || !ud?.user?.id) throw userErr ?? new Error('Not signed in.')
+    const userId = ud.user.id
 
-  const { data: settings } = await supabase
-    .from('user_settings')
-    .select('global_api_pause')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (settings?.global_api_pause === true) throw new Error('API pause is active — analysis disabled.')
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('global_api_pause')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (settings?.global_api_pause === true) throw new Error('API pause is active — analysis disabled.')
 
-  const target = await resolveAnalysisTarget(supabase, userId, args)
-  const step = args.step ?? 'run-analysis'
+    const target = await resolveAnalysisTarget(supabase, userId, args)
+    const step = args.step ?? 'run-analysis'
 
-  const { geminiJson, researchLogId } = await obtainGeminiJson(
-    supabase,
-    userId,
-    target.tickerTag,
-    target.ticker,
-    target.company,
-    target.exchange,
-    progress,
-  )
+    console.log('[direct-triad] step: obtaining Gemini JSON')
+    const { geminiJson, researchLogId } = await obtainGeminiJson(
+      supabase,
+      userId,
+      target.tickerTag,
+      target.ticker,
+      target.company,
+      target.exchange,
+      progress,
+    )
+    console.log(
+      '[direct-triad] step: Gemini JSON obtained, keys:',
+      Object.keys(/** @type {Record<string, unknown>} */ (geminiJson && typeof geminiJson === 'object' ? geminiJson : {})),
+    )
 
-  if (step === 'suggest-framework') {
-    return buildFrameworkSuggestion(geminiJson)
-  }
+    if (step === 'suggest-framework') {
+      return buildFrameworkSuggestion(geminiJson)
+    }
 
-  const confirmedKey = normalizeFrameworkKey(args.confirmedFrameworkKey)
-  const frameworkKey =
-    step === 'run-analysis' && confirmedKey && confirmedKey !== 'unknown'
-      ? resolveFrameworkKey(confirmedKey, {}, /** @type {Record<string, unknown>} */ (geminiJson))
-      : resolveFrameworkKey(
-          '',
-          {},
-          /** @type {Record<string, unknown>} */ (geminiJson),
-        )
+    const confirmedKey = normalizeFrameworkKey(args.confirmedFrameworkKey)
+    const frameworkKey =
+      step === 'run-analysis' && confirmedKey && confirmedKey !== 'unknown'
+        ? resolveFrameworkKey(confirmedKey, {}, /** @type {Record<string, unknown>} */ (geminiJson))
+        : resolveFrameworkKey(
+            '',
+            {},
+            /** @type {Record<string, unknown>} */ (geminiJson),
+          )
 
-  progress('Synthesising item-level scorecard with Claude...')
-  const claudeJson = await fetchClaudeScorecard(
-    buildClaudeScorecardPrompt(
+    progress('Synthesising item-level scorecard with Claude...')
+    console.log('[direct-triad] step: building Claude prompt')
+    const claudePrompt = buildClaudeScorecardPrompt(
       frameworkKey,
       frameworkLabelForKey(frameworkKey),
       target.ticker,
       target.company,
       /** @type {Record<string, unknown>} */ (geminiJson),
-    ),
-  )
-  console.log('[direct-triad] Claude complete')
+    )
+    console.log('[direct-triad] step: calling Claude')
+    const claudeJson = await fetchClaudeScorecard(claudePrompt)
+    console.log('[direct-triad] Claude complete')
 
   const resolvedFrameworkKey = resolveFrameworkKey(
     confirmedKey,
@@ -904,5 +913,9 @@ export async function runDirectTriadAnalysis(supabase, args) {
     overall_score: Number.isFinite(overallScore) ? overallScore : null,
     framework: frameworkLabel,
     tier: scorecardForUi.tier_label || scorecardForUi.tier,
+  }
+  } catch (err) {
+    console.error('[direct-triad] PIPELINE ERROR:', err?.message, err?.stack)
+    throw err
   }
 }
