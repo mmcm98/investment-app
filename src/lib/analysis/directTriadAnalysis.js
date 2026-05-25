@@ -679,21 +679,53 @@ async function resolveAnalysisTarget(supabase, userId, args) {
 }
 
 /**
- * @param {unknown} geminiJson
+ * @param {string} ticker
+ * @param {string} company
+ * @param {string} exchange
  */
-function buildFrameworkSuggestion(geminiJson) {
-  const g = /** @type {Record<string, unknown>} */ (geminiJson && typeof geminiJson === 'object' ? geminiJson : {})
-  const frameworkKey = frameworkKeyFromRecommendation(g.recommended_framework)
-  const reason =
-    text(g.business_overview)?.slice(0, 500) ||
-    text(g.competitive_moat)?.slice(0, 400) ||
-    'Suggested from Gemini deep research (recommended_framework).'
+async function classifyFramework(ticker, company, exchange) {
+  const apiKey = `${import.meta.env.VITE_GEMINI_API_KEY ?? ''}`.trim()
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured.')
+
+  const prompt = `Classify ${ticker} (${company}) listed on ${exchange} into ONE of these 5 frameworks. Return ONLY the framework name, no JSON, no explanation:
+
+1. Regular Stock — established companies with revenues and earnings history
+2. Thematic ETF — sector or factor ETFs
+3. Fund Manager / LIC — active managers, LICs, complex ETFs
+4. Speculative Stock — pre-profit, early-stage, thesis-driven
+5. Alternative / PE — private equity, infrastructure, listed PE vehicles
+
+Output one of: Regular Stock | Thematic ETF | Fund Manager / LIC | Speculative Stock | Alternative / PE`
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 200, temperature: 0.1 },
+    }),
+  })
+
+  const resText = await res.text()
+  if (!res.ok) throw new Error(`Gemini Flash classification failed (${res.status}): ${resText.slice(0, 300)}`)
+
+  const data = JSON.parse(resText)
+  const parts = data?.candidates?.[0]?.content?.parts ?? []
+  const output = (Array.isArray(parts) ? parts : [])
+    .map((p) => (p && typeof p === 'object' && 'text' in p ? String(p.text) : ''))
+    .join('')
+    .trim()
+
+  console.log('[direct-triad] Gemini Flash classification:', output)
+
+  const frameworkKey = frameworkKeyFromRecommendation(output)
   return {
     ok: true,
     suggestion: {
       framework_key: frameworkKey,
       framework_label: frameworkLabelForKey(frameworkKey),
-      reason,
+      reason: `Gemini Flash classified ${ticker} as "${output}".`,
     },
   }
 }
@@ -1002,6 +1034,11 @@ export async function runDirectTriadAnalysis(supabase, args) {
       return runGenerateThesis(supabase, userId, target, progress)
     }
 
+    if (step === 'suggest-framework') {
+      progress('Classifying with Gemini Flash...')
+      return classifyFramework(target.ticker, target.company, target.exchange)
+    }
+
     if (args.forceFreshResearch) {
       console.log('[direct-triad] force fresh research: cache cleared for', target.tickerTag)
       await supabase
@@ -1020,10 +1057,6 @@ export async function runDirectTriadAnalysis(supabase, args) {
       target.exchange,
       progress,
     )
-
-    if (step === 'suggest-framework') {
-      return buildFrameworkSuggestion(geminiJson)
-    }
 
     const confirmedKey = normalizeFrameworkKey(args.confirmedFrameworkKey)
     const frameworkKey =

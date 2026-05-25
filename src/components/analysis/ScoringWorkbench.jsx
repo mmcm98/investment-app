@@ -253,7 +253,7 @@ export function ScoringWorkbench({
       {(phase === 'suggesting' || phase === 'running') && (
         <div className="mt-4 space-y-2">
           <p className="font-mono text-[11px] text-[#79CBFF]">
-            {phase === 'suggesting' ? 'Selecting framework…' : progressLabel || 'Running scorecard analysis…'}
+            {phase === 'suggesting' ? 'Classifying with Gemini Flash…' : progressLabel || 'Running scorecard analysis…'}
           </p>
 
           <div className="h-2 w-full overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
@@ -268,7 +268,7 @@ export function ScoringWorkbench({
           </div>
 
           <p className="font-mono text-[10px] text-[#505068]">
-            {phase === 'running' ? 'Gemini research 60–180s, then Claude scorecard 60–180s.' : 'Quick Opus routing…'}
+            {phase === 'running' ? 'Gemini research 60–180s, then Claude scorecard 60–180s.' : 'Usually 2–5 seconds.'}
           </p>
         </div>
       )}
