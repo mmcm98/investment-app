@@ -1006,7 +1006,7 @@ async function runGenerateThesis(supabase, userId, target, progress) {
  *   holdingId?: string,
  *   watchlistItemId?: string,
  *   positionId?: string,
- *   step?: 'suggest-framework' | 'run-analysis' | 'generate-thesis',
+ *   step?: 'suggest-framework' | 'run-analysis' | 'gemini-only' | 'claude-only' | 'generate-thesis',
  *   confirmedFrameworkKey?: string,
  *   forceFreshResearch?: boolean,
  *   onProgress?: (message: string) => void,
@@ -1046,6 +1046,69 @@ export async function runDirectTriadAnalysis(supabase, args) {
         .delete()
         .eq('user_id', userId)
         .eq('ticker', target.tickerTag)
+    }
+
+    if (step === 'gemini-only') {
+      progress('Running deep research with Gemini Pro...')
+      const { researchLogId } = await obtainGeminiJson(
+        supabase, userId, target.tickerTag, target.ticker, target.company, target.exchange, progress,
+      )
+      return { ok: true, researchLogId, generated_at: new Date().toISOString(), ticker: target.tickerTag }
+    }
+
+    if (step === 'claude-only') {
+      const { geminiJson, researchLogId } = await obtainGeminiJson(
+        supabase, userId, target.tickerTag, target.ticker, target.company, target.exchange, progress, { cacheOnly: true },
+      )
+      const confirmedKey = normalizeFrameworkKey(args.confirmedFrameworkKey)
+      const frameworkKey =
+        confirmedKey && confirmedKey !== 'unknown'
+          ? resolveFrameworkKey(confirmedKey, {}, /** @type {Record<string, unknown>} */ (geminiJson))
+          : resolveFrameworkKey('', {}, /** @type {Record<string, unknown>} */ (geminiJson))
+
+      progress('Analysing with Claude...')
+      const claudePrompt = buildClaudeScorecardPrompt(
+        frameworkKey, frameworkLabelForKey(frameworkKey), target.ticker, target.company,
+        /** @type {Record<string, unknown>} */ (geminiJson),
+      )
+      const claudeJson = await fetchClaudeScorecard(claudePrompt)
+      const resolvedFrameworkKey = resolveFrameworkKey(confirmedKey, /** @type {Record<string, unknown>} */ (claudeJson), geminiJson)
+
+      progress('Generating buy zones & exit triggers...')
+      const { buyZones, exitTriggers } = await fetchClaudeBuyZonesAndExits(
+        target.ticker, target.company, geminiJson, /** @type {Record<string, unknown>} */ (claudeJson),
+      )
+
+      const { overallScore, frameworkLabel, scorecardForUi } = buildScorecardArtifacts(
+        geminiJson, claudeJson, resolvedFrameworkKey, buyZones, exitTriggers,
+      )
+
+      if (target.kind === 'holding') {
+        progress('Saving results...')
+        const holding = target.holding
+        if (!holding) throw new Error('Holding not found.')
+        const position = await ensurePositionForHolding(supabase, holding, userId, target.exchange)
+        const { data: maxRow } = await supabase.from('scorecard_versions').select('version_number').eq('user_id', userId).eq('position_id', position.id).order('version_number', { ascending: false }).limit(1).maybeSingle()
+        const versionNumber = Number.isFinite(Number(maxRow?.version_number)) ? Number(maxRow.version_number) + 1 : 1
+        const { error: scErr } = await supabase.from('scorecard_versions').insert({
+          user_id: userId, position_id: position.id, version_number: versionNumber,
+          framework: resolvedFrameworkKey, overall_score: Number.isFinite(overallScore) ? overallScore : null,
+          payload: { ...scorecardForUi, claude: claudeJson }, generated_at: new Date().toISOString(),
+        })
+        if (scErr) throw scErr
+        const prevExtra = position.extra && typeof position.extra === 'object' ? { .../** @type {Record<string, unknown>} */ (position.extra) } : {}
+        const synopsis = text(scorecardForUi.synopsis_one_liner)
+        if (synopsis) prevExtra.synopsis = synopsis
+        prevExtra.scorecard = scorecardForUi
+        delete prevExtra.research_paper
+        await supabase.from('positions').update({ awaiting_analysis: false, buy_zones: buyZones, exit_triggers: exitTriggers, extra: prevExtra, updated_at: new Date().toISOString() }).eq('id', position.id).eq('user_id', userId)
+        if (researchLogId) await supabase.from('research_logs').update({ claude_synthesis_status: 'success' }).eq('id', researchLogId)
+        return { ok: true, version_number: versionNumber, overall_score: Number.isFinite(overallScore) ? overallScore : null, framework: frameworkLabel, tier: scorecardForUi.tier_label || scorecardForUi.tier }
+      }
+
+      progress('Saving results...')
+      const { versionNumber } = await persistScorecardVersion(supabase, userId, target, resolvedFrameworkKey, scorecardForUi, claudeJson, overallScore, researchLogId, buyZones, exitTriggers)
+      return { ok: true, version_number: versionNumber, overall_score: Number.isFinite(overallScore) ? overallScore : null, framework: frameworkLabel, tier: scorecardForUi.tier_label || scorecardForUi.tier }
     }
 
     const { geminiJson, researchLogId } = await obtainGeminiJson(

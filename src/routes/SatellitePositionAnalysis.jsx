@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useSharesightIntegration } from '../context/SharesightIntegrationContext.jsx'
 import { useSatellitePortfolio } from '../hooks/useSatellitePortfolio.js'
@@ -83,10 +83,18 @@ export function SatellitePositionAnalysis() {
   const { supabase } = useSharesightIntegration()
   const sp = useSatellitePortfolio()
   const [tab, setTab] = useState(/** @type {(typeof TABS)[number]['id']} */ ('scorecard'))
-  const [analysisPhase, setAnalysisPhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
-  const [analysisMessage, setAnalysisMessage] = useState('')
-  const [analysisElapsed, setAnalysisElapsed] = useState(0)
+
   const [forceFresh, setForceFresh] = useState(false)
+  const [errorText, setErrorText] = useState(/** @type {string|null} */ (null))
+
+  const [geminiPhase, setGeminiPhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
+  const [claudePhase, setClaudePhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
+  const [geminiLabel, setGeminiLabel] = useState('')
+  const [claudeLabel, setClaudeLabel] = useState('')
+  const [geminiElapsed, setGeminiElapsed] = useState(0)
+  const [claudeElapsed, setClaudeElapsed] = useState(0)
+  const [geminiDate, setGeminiDate] = useState(/** @type {string|null} */ (null))
+  const [claudeDate, setClaudeDate] = useState(/** @type {string|null} */ (null))
 
   const routeId = `${params.id ?? params.holdingId ?? ''}`.trim()
   const rows = useMemo(() => /** @type {Record<string, unknown>[]} */ (sp.tableCards ?? []), [sp.tableCards])
@@ -118,41 +126,100 @@ export function SatellitePositionAnalysis() {
   const framework = `${scorecard?.framework ?? row?.assetClass ?? '—'}`.trim() || '—'
   const tier = `${scorecard?.tier_label ?? scorecard?.tier ?? row?.tier ?? '—'}`.trim() || '—'
   const runHoldingId = `${row?.holdingId ?? row?.id ?? row?.sharesight_id ?? routeId}`.trim()
-  const runDisabled = analysisPhase === 'running' || !runHoldingId
 
-  async function runAnalysis() {
+  const hasGemini = geminiPhase === 'done' || geminiDate != null
+  const busy = geminiPhase === 'running' || claudePhase === 'running'
+
+  useEffect(() => {
+    if (!supabase || !row) return
+    let cancelled = false
+    void (async () => {
+      const { data: ud } = await supabase.auth.getUser()
+      const uid = ud?.user?.id
+      if (!uid || cancelled) return
+
+      const ticker = `${row?.ticker ?? ''}`.trim()
+      if (ticker) {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const { data: rl } = await supabase
+          .from('research_logs')
+          .select('timestamp')
+          .eq('user_id', uid)
+          .eq('ticker', ticker)
+          .gte('timestamp', sevenDaysAgo)
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (!cancelled && rl?.timestamp) {
+          setGeminiPhase('done')
+          setGeminiDate(rl.timestamp)
+        }
+      }
+
+      if (!cancelled && hasScorecard && scorecard) {
+        const gen = scorecard.generated_at
+        if (typeof gen === 'string' && gen) setClaudeDate(gen)
+        setClaudePhase('done')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [supabase, row, hasScorecard, scorecard])
+
+  const runGemini = useCallback(async () => {
     if (!supabase || !runHoldingId || !row) return
-
-    setAnalysisPhase('running')
-    setAnalysisElapsed(0)
-    setAnalysisMessage('Starting analysis...')
-
+    setErrorText(null)
+    setGeminiPhase('running')
+    setGeminiLabel('Running deep research with Gemini Pro...')
+    setGeminiElapsed(0)
     const started = Date.now()
-    const timer = setInterval(() => {
-      setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
-    }, 1000)
-
+    const timer = setInterval(() => setGeminiElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
     try {
-      const result = await runDirectTriadAnalysis(supabase, {
+      const out = await runDirectTriadAnalysis(supabase, {
         row,
         holdingId: runHoldingId,
+        step: 'gemini-only',
         forceFreshResearch: forceFresh,
-        onProgress: (message) => setAnalysisMessage(message),
+        onProgress: (m) => setGeminiLabel(m),
       })
-
-      setAnalysisPhase('done')
-      setAnalysisMessage(
-        `Analysis complete. Version ${result.version_number ?? '—'} created with overall score ${result.overall_score ?? '—'}%.`,
-      )
-      await sp.refresh?.()
-    } catch (error) {
-      setAnalysisPhase('error')
-      setAnalysisMessage(error?.message || String(error) || 'Unknown error')
+      if (!out || Reflect.get(out, 'ok') !== true) throw new Error('Gemini research did not complete')
+      setGeminiPhase('done')
+      setGeminiDate(typeof Reflect.get(out, 'generated_at') === 'string' ? String(Reflect.get(out, 'generated_at')) : new Date().toISOString())
+      setGeminiLabel('')
+    } catch (e) {
+      setGeminiPhase('error')
+      setErrorText(e instanceof Error ? e.message : String(e))
     } finally {
       clearInterval(timer)
-      setAnalysisElapsed(Math.floor((Date.now() - started) / 1000))
     }
-  }
+  }, [supabase, runHoldingId, row, forceFresh])
+
+  const runClaude = useCallback(async () => {
+    if (!supabase || !runHoldingId || !row) return
+    setErrorText(null)
+    setClaudePhase('running')
+    setClaudeLabel('Analysing with Claude...')
+    setClaudeElapsed(0)
+    const started = Date.now()
+    const timer = setInterval(() => setClaudeElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    try {
+      const out = await runDirectTriadAnalysis(supabase, {
+        row,
+        holdingId: runHoldingId,
+        step: 'claude-only',
+        onProgress: (m) => setClaudeLabel(m),
+      })
+      if (!out || Reflect.get(out, 'ok') !== true) throw new Error('Claude analysis did not complete')
+      setClaudePhase('done')
+      setClaudeDate(new Date().toISOString())
+      setClaudeLabel('')
+      await sp.refresh?.()
+    } catch (e) {
+      setClaudePhase('error')
+      setErrorText(e instanceof Error ? e.message : String(e))
+    } finally {
+      clearInterval(timer)
+    }
+  }, [supabase, runHoldingId, row, sp])
 
   if (sp.satelliteHydrated && !row) {
     return (
@@ -189,51 +256,96 @@ export function SatellitePositionAnalysis() {
               <span>Current price: <span className="text-[#F0F0F8]">{fmtNative(currentPrice, currency)}</span></span>
             </div>
           </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#9090A8]">
-                <input type="checkbox" checked={forceFresh} onChange={(e) => setForceFresh(e.target.checked)} className="accent-[#4DB8FF]" />
-                Force fresh research
-              </label>
-              <button
-                type="button"
-                disabled={runDisabled}
-                onClick={() => void runAnalysis()}
-                className={`rounded-lg border px-4 py-2 font-mono text-xs ${
-                  runDisabled
+        </div>
+
+        {/* Status indicators */}
+        <div className="mt-4 space-y-1 font-mono text-[11px]">
+          <p className={geminiPhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'}>
+            1. Gemini research:{' '}
+            {geminiPhase === 'done'
+              ? `Complete${geminiDate ? ` (${new Date(geminiDate).toLocaleDateString()})` : ''}`
+              : geminiPhase === 'running'
+                ? 'Running…'
+                : 'Pending'}
+          </p>
+          <p className={claudePhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'}>
+            2. Claude scorecard:{' '}
+            {claudePhase === 'done'
+              ? `Complete${claudeDate ? ` (${new Date(claudeDate).toLocaleDateString()})` : ''}`
+              : claudePhase === 'running'
+                ? 'Running…'
+                : 'Pending'}
+          </p>
+        </div>
+
+        {/* Two-button flow */}
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={busy || !runHoldingId || (geminiPhase === 'done' && !forceFresh)}
+              onClick={() => void runGemini()}
+              className={`rounded-lg border px-4 py-2 font-mono text-xs font-semibold ${
+                geminiPhase === 'done' && !forceFresh
+                  ? 'border-[rgba(34,197,94,0.35)] bg-[rgba(34,197,94,0.08)] text-[#22C55E]'
+                  : busy || !runHoldingId
                     ? 'border-[rgba(255,255,255,0.08)] bg-[#1A1A24] text-[#505068]'
                     : 'border-[#4DB8FF] bg-[rgba(77,184,255,0.12)] text-[#79CBFF] hover:bg-[rgba(77,184,255,0.18)]'
-                }`}
-              >
-                {analysisPhase === 'running' ? 'Running analysis...' : 'Run analysis'}
-              </button>
-            </div>
-            {analysisMessage ? (
-              <div className="max-w-[360px] text-right">
-                <p
-                  className={`font-mono text-[10px] ${
-                    analysisPhase === 'error' ? 'text-[#EF4444]' : analysisPhase === 'done' ? 'text-[#22C55E]' : 'text-[#9090A8]'
-                  }`}
-                >
-                  {analysisPhase === 'running' ? `${analysisMessage} ${analysisElapsed}s elapsed` : analysisMessage}
-                </p>
-                {analysisPhase === 'running' ? (
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1A1A24]">
-                    <div
-                      className="h-full rounded-full bg-[#4DB8FF] transition-all"
-                      style={{ width: `${Math.min(100, (analysisElapsed / 180) * 100)}%` }}
-                    />
-                  </div>
-                ) : null}
-                {analysisPhase === 'error' ? (
-                  <button type="button" className="mt-2 font-mono text-[10px] text-[#79CBFF]" onClick={() => void runAnalysis()}>
-                    Retry
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
+              }`}
+            >
+              {geminiPhase === 'done' && !forceFresh ? 'Gemini research complete ✓' : geminiPhase === 'running' ? 'Running Gemini…' : 'Complete Gemini Research'}
+            </button>
+            <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#9090A8]">
+              <input type="checkbox" checked={forceFresh} onChange={(e) => setForceFresh(e.target.checked)} className="accent-[#4DB8FF]" />
+              Force fresh research
+            </label>
           </div>
+
+          {geminiPhase === 'running' ? (
+            <div className="space-y-1">
+              <p className="font-mono text-[10px] text-[#79CBFF]">{geminiLabel} {geminiElapsed}s elapsed</p>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
+                <div className="h-full rounded-full bg-[#4DB8FF] transition-all" style={{ width: `${Math.min(100, (geminiElapsed / 180) * 100)}%` }} />
+              </div>
+              <p className="font-mono text-[10px] text-[#505068]">Typically 90–180 seconds.</p>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={busy || !hasGemini || claudePhase === 'done'}
+              onClick={() => void runClaude()}
+              className={`rounded-lg border px-4 py-2 font-mono text-xs font-semibold ${
+                claudePhase === 'done'
+                  ? 'border-[rgba(34,197,94,0.35)] bg-[rgba(34,197,94,0.08)] text-[#22C55E]'
+                  : !hasGemini || busy
+                    ? 'border-[rgba(255,255,255,0.08)] bg-[#1A1A24] text-[#505068]'
+                    : 'border-[#4DB8FF] bg-[rgba(77,184,255,0.12)] text-[#79CBFF] hover:bg-[rgba(77,184,255,0.18)]'
+              }`}
+            >
+              {claudePhase === 'done' ? 'Claude analysis complete ✓' : claudePhase === 'running' ? 'Running Claude…' : 'Complete Claude Analysis'}
+            </button>
+            {!hasGemini && claudePhase !== 'done' ? <span className="font-mono text-[10px] text-[#505068]">Complete Gemini research first</span> : null}
+          </div>
+
+          {claudePhase === 'running' ? (
+            <div className="space-y-1">
+              <p className="font-mono text-[10px] text-[#79CBFF]">{claudeLabel} {claudeElapsed}s elapsed</p>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
+                <div className="h-full rounded-full bg-[#4DB8FF] transition-all" style={{ width: `${Math.min(100, (claudeElapsed / 120) * 100)}%` }} />
+              </div>
+              <p className="font-mono text-[10px] text-[#505068]">Typically 60–90 seconds.</p>
+            </div>
+          ) : null}
         </div>
+
+        {errorText ? (
+          <p className="mt-3 font-mono text-sm text-[#EF4444]">
+            {errorText}{' '}
+            <button type="button" className="text-[#79CBFF] underline" onClick={() => setErrorText(null)}>Dismiss</button>
+          </p>
+        ) : null}
       </header>
 
       <div className="flex flex-wrap gap-2 border-b border-[rgba(255,255,255,0.08)]">
@@ -261,13 +373,10 @@ export function SatellitePositionAnalysis() {
               <select disabled className="rounded border border-[rgba(255,255,255,0.08)] bg-[#1A1A24] px-3 py-2 font-mono text-xs text-[#505068]">
                 <option>Current version</option>
               </select>
-              <button disabled className="rounded border border-[rgba(255,255,255,0.08)] bg-[#1A1A24] px-3 py-2 font-mono text-xs text-[#505068]">
-                Re-analyse
-              </button>
             </div>
           </div>
           {!scorecard ? (
-            <EmptyState>No scorecard yet — click Run Analysis to generate</EmptyState>
+            <EmptyState>No scorecard yet — complete Gemini research then Claude analysis above</EmptyState>
           ) : (
             <div className="space-y-5">
               <div className="grid gap-3 md:grid-cols-3">
@@ -338,7 +447,7 @@ export function SatellitePositionAnalysis() {
         <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] p-5">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-[#9090A8]">Buy Zones</h2>
           {!buyZones.length ? (
-            <EmptyState>No buy zones set — these will be generated after first analysis</EmptyState>
+            <EmptyState>No buy zones set — these will be generated after Claude analysis</EmptyState>
           ) : (
             <div className="mt-4 space-y-3">
               {buyZones.map((zone, index) => {
@@ -361,7 +470,7 @@ export function SatellitePositionAnalysis() {
         <section className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#111118] p-5">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-[#9090A8]">Exit Triggers</h2>
           {!exitTriggers.length ? (
-            <EmptyState>No exit triggers set — these will be generated after first analysis</EmptyState>
+            <EmptyState>No exit triggers set — these will be generated after Claude analysis</EmptyState>
           ) : (
             <div className="mt-4 space-y-3">
               {exitTriggers.map((trigger, index) => {
