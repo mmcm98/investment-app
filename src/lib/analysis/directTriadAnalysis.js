@@ -1,4 +1,4 @@
-import { buildClaudeResearchPaperPrompt, buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
+import { buildClaudeBuyZonesPrompt, buildClaudeResearchPaperPrompt, buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
 
 const GEMINI_MODEL = 'gemini-3.1-pro-preview'
 const CLAUDE_MODEL = 'claude-sonnet-4-6'
@@ -311,6 +311,56 @@ async function fetchClaudeScorecard(prompt) {
 }
 
 /**
+ * @param {string} ticker
+ * @param {string} company
+ * @param {unknown} geminiJson
+ * @param {Record<string, unknown>} scorecardJson
+ */
+async function fetchClaudeBuyZonesAndExits(ticker, company, geminiJson, scorecardJson) {
+  const url = '/api/anthropic-proxy'
+  const prompt = buildClaudeBuyZonesPrompt(
+    ticker,
+    company,
+    /** @type {Record<string, unknown>} */ (geminiJson),
+    scorecardJson,
+  )
+  const body = {
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    stream: true,
+    messages: [{ role: 'user', content: prompt }],
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    console.error('[direct-triad] Buy zones call failed:', res.status, errText.slice(0, 300))
+    return { buyZones: [], exitTriggers: [] }
+  }
+
+  const { fullText, stopReason, usage } = await readAnthropicSseStream(res)
+
+  console.log('[direct-triad] Buy zones stream complete, length:', fullText.length)
+  console.log('[direct-triad] Buy zones stop_reason:', stopReason)
+  console.log('[direct-triad] Buy zones usage:', JSON.stringify(usage))
+
+  try {
+    const parsed = parseJsonFromModel(fullText)
+    return {
+      buyZones: Array.isArray(parsed.buy_zones_native) ? parsed.buy_zones_native : [],
+      exitTriggers: Array.isArray(parsed.exit_triggers) ? parsed.exit_triggers : [],
+    }
+  } catch (e) {
+    console.error('[direct-triad] Buy zones parse failed:', e?.message)
+    return { buyZones: [], exitTriggers: [] }
+  }
+}
+
+/**
  * @param {string} prompt
  */
 async function fetchClaudeResearchPaper(prompt) {
@@ -423,7 +473,7 @@ async function obtainGeminiJson(supabase, userId, tickerTag, ticker, company, ex
  * @param {Record<string, unknown>} claudeJson
  * @param {string} frameworkKey
  */
-function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey) {
+function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey, buyZones = [], exitTriggers = []) {
   const overallScore = Number(claudeJson.overall_score ?? claudeJson.overall_score_pct)
   const frameworkLabel =
     text(claudeJson.framework) || frameworkLabelForKey(frameworkKey) || text(/** @type {Record<string, unknown>} */ (geminiJson).recommended_framework)
@@ -432,8 +482,6 @@ function buildScorecardArtifacts(geminiJson, claudeJson, frameworkKey) {
   const synopsis = text(claudeJson.synopsis) || text(claudeJson.synopsis_one_liner)
   const items = normalizeScorecardItems(claudeJson, frameworkKey)
   const sectionScores = normalizeSectionScores(claudeJson)
-  const buyZones = Array.isArray(claudeJson.buy_zones_native) ? claudeJson.buy_zones_native : []
-  const exitTriggers = Array.isArray(claudeJson.exit_triggers) ? claudeJson.exit_triggers : []
 
   const scorecardForUi = {
     framework: frameworkLabel || frameworkKey,
@@ -1003,10 +1051,20 @@ export async function runDirectTriadAnalysis(supabase, args) {
       geminiJson,
     )
 
-    const { overallScore, frameworkLabel, scorecardForUi, buyZones, exitTriggers } = buildScorecardArtifacts(
+    progress('Generating buy zones & exit triggers...')
+    const { buyZones, exitTriggers } = await fetchClaudeBuyZonesAndExits(
+      target.ticker,
+      target.company,
+      geminiJson,
+      /** @type {Record<string, unknown>} */ (claudeJson),
+    )
+
+    const { overallScore, frameworkLabel, scorecardForUi } = buildScorecardArtifacts(
       geminiJson,
       claudeJson,
       resolvedFrameworkKey,
+      buyZones,
+      exitTriggers,
     )
 
     if (target.kind === 'holding') {

@@ -167,9 +167,7 @@ INSTRUCTIONS:
 3. Group items into sections matching the framework table with correct weights.
 4. Calculate weighted section_score_pct and overall_score (0-100).
 5. Assign tier (1-5) and tier_label using this framework's tier thresholds.
-6. Generate up to 3 buy_zones_native with floor_price_native as numbers in listing currency.
-7. Generate up to 5 exit_triggers.
-8. Do NOT include a research paper or markdown thesis — scorecard JSON only.
+6. Do NOT include buy_zones_native, exit_triggers, research paper, or markdown thesis — scorecard items only.
 
 Return ONLY a JSON object with this exact structure (no markdown fences):
 
@@ -184,11 +182,10 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
   "synopsis_one_liner": "string <= 140 chars",
   "sections": [
     {
-      "section_number": 1,
-      "section_name": "Section name from framework",
+      "section_id": "section_slug",
+      "title": "Section name from framework",
       "weight_pct": number,
-      "item_count": number,
-      "section_score_pct": 0-100,
+      "score_pct": 0-100,
       "items": [
         {
           "item_number": 1,
@@ -220,16 +217,47 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
       "weight_pct": number,
       "score_pct": 0-100
     }
-  ],
-  "buy_zones_native": [
-    { "label": "string", "floor_price_native": number, "rationale": "string" }
-  ],
-  "exit_triggers": [
-    { "label": "string", "condition_native": "string", "rationale": "string" }
   ]
 }
 
-The flat "items" array must contain all ${itemCount} items with unique item_key values. stars_max must be ${starsMax} for every item. Do not include research_paper_markdown or research_paper_outline.`
+The flat "items" array must contain all ${itemCount} items with unique item_key values. stars_max must be ${starsMax} for every item.`
+}
+
+/**
+ * @param {string} ticker
+ * @param {string} companyName
+ * @param {Record<string, unknown>} geminiJson
+ * @param {Record<string, unknown>} scorecardJson
+ */
+export function buildClaudeBuyZonesPrompt(ticker, companyName, geminiJson, scorecardJson) {
+  return `Based on the deep research and scorecard provided, generate buy zones and exit triggers for ${ticker} (${companyName}).
+
+DEEP RESEARCH:
+${JSON.stringify(geminiJson)}
+
+SCORECARD (for context):
+- Framework: ${scorecardJson.framework ?? 'unknown'}
+- Overall score: ${scorecardJson.overall_score ?? scorecardJson.overall_score_pct ?? '—'}/100
+- Tier: ${scorecardJson.tier_label ?? scorecardJson.tier ?? '—'}
+- Synopsis: ${scorecardJson.synopsis_one_liner ?? scorecardJson.synopsis ?? '—'}
+
+Return ONLY this JSON, no markdown fences, no prose:
+
+{
+  "buy_zones_native": [
+    { "label": "Strong buy", "floor_price_native": number, "rationale": "1 sentence" },
+    { "label": "Accumulate", "floor_price_native": number, "rationale": "1 sentence" },
+    { "label": "Watch", "floor_price_native": number, "rationale": "1 sentence" }
+  ],
+  "exit_triggers": [
+    { "label": "string", "condition_native": "specific measurable condition", "rationale": "1 sentence" }
+  ]
+}
+
+Rules:
+- Up to 3 buy zones with floor_price_native as numbers in listing currency.
+- Up to 5 exit triggers with specific, measurable conditions.
+- Prices in native listing currency only.`
 }
 
 /**
