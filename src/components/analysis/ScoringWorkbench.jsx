@@ -84,6 +84,7 @@ export function ScoringWorkbench({
   const [overrideMap, setOverrideMap] = useState(/** @type {Record<string, number>} */ ({}))
   const [analysisProgressPct, setAnalysisProgressPct] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
+  const [forceFresh, setForceFresh] = useState(false)
 
   const loadOverrides = useCallback(async () => {
     await Promise.resolve()
@@ -204,6 +205,7 @@ export function ScoringWorkbench({
         const out = await runDirectTriadAnalysis(supabase, {
           step: 'run-analysis',
           confirmedFrameworkKey: frameworkKey,
+          forceFreshResearch: forceFresh,
           ...(positionId != null && `${positionId}`.trim()
             ? { positionId: `${positionId}`.trim() }
             : { watchlistItemId: `${watchlistItemId ?? ''}`.trim() }),
@@ -223,7 +225,7 @@ export function ScoringWorkbench({
         setErrorText(e instanceof Error ? e.message : String(e))
       }
     },
-    [supabase, positionId, watchlistItemId, refreshDetail],
+    [supabase, positionId, watchlistItemId, refreshDetail, forceFresh],
   )
 
   const suggestedKey = suggestion && typeof rz(suggestion, 'framework_key') === 'string' ? String(rz(suggestion, 'framework_key')) : ''
@@ -281,7 +283,7 @@ export function ScoringWorkbench({
 
           <p className="text-sm text-[#C8C8D8]">{String(rz(suggestion, 'reason') ?? '')}</p>
 
-          <div className="flex flex-wrap gap-2 pt-2">
+          <div className="flex flex-wrap items-center gap-2 pt-2">
             <button
               type="button"
               className="rounded-lg bg-[#4DB8FF] px-4 py-2 font-mono text-xs font-semibold text-[#0A0A0F]"
@@ -293,6 +295,11 @@ export function ScoringWorkbench({
             <button type="button" className="rounded-lg border border-[rgba(255,255,255,0.12)] px-4 py-2 font-mono text-xs" onClick={() => setPhase('idle')}>
               Dismiss
             </button>
+
+            <label className="ml-2 flex items-center gap-1.5 font-mono text-[10px] text-[#9090A8]">
+              <input type="checkbox" checked={forceFresh} onChange={(e) => setForceFresh(e.target.checked)} className="accent-[#4DB8FF]" />
+              Force fresh research
+            </label>
           </div>
         </div>
       ) : null}

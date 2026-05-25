@@ -180,8 +180,8 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
   "overall_score_pct": 0-100,
   "tier": 1-5,
   "tier_label": "Exceptional | High conviction | Qualifies | Marginal | Avoid",
-  "synopsis": "one paragraph executive summary",
-  "synopsis_one_liner": "string <= 280 chars",
+  "synopsis": "1-2 sentence executive summary",
+  "synopsis_one_liner": "string <= 140 chars",
   "sections": [
     {
       "section_number": 1,
@@ -218,8 +218,7 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
       "section_id": "section_slug",
       "title": "section name",
       "weight_pct": number,
-      "score_pct": 0-100,
-      "notes": "brief section summary"
+      "score_pct": 0-100
     }
   ],
   "buy_zones_native": [

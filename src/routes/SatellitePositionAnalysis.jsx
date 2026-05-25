@@ -86,6 +86,7 @@ export function SatellitePositionAnalysis() {
   const [analysisPhase, setAnalysisPhase] = useState(/** @type {'idle'|'running'|'done'|'error'} */ ('idle'))
   const [analysisMessage, setAnalysisMessage] = useState('')
   const [analysisElapsed, setAnalysisElapsed] = useState(0)
+  const [forceFresh, setForceFresh] = useState(false)
 
   const routeId = `${params.id ?? params.holdingId ?? ''}`.trim()
   const rows = useMemo(() => /** @type {Record<string, unknown>[]} */ (sp.tableCards ?? []), [sp.tableCards])
@@ -135,6 +136,7 @@ export function SatellitePositionAnalysis() {
       const result = await runDirectTriadAnalysis(supabase, {
         row,
         holdingId: runHoldingId,
+        forceFreshResearch: forceFresh,
         onProgress: (message) => setAnalysisMessage(message),
       })
 
@@ -188,18 +190,24 @@ export function SatellitePositionAnalysis() {
             </div>
           </div>
           <div className="flex flex-col items-end gap-2">
-            <button
-              type="button"
-              disabled={runDisabled}
-              onClick={() => void runAnalysis()}
-              className={`rounded-lg border px-4 py-2 font-mono text-xs ${
-                runDisabled
-                  ? 'border-[rgba(255,255,255,0.08)] bg-[#1A1A24] text-[#505068]'
-                  : 'border-[#4DB8FF] bg-[rgba(77,184,255,0.12)] text-[#79CBFF] hover:bg-[rgba(77,184,255,0.18)]'
-              }`}
-            >
-              {analysisPhase === 'running' ? 'Running analysis...' : 'Run analysis'}
-            </button>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#9090A8]">
+                <input type="checkbox" checked={forceFresh} onChange={(e) => setForceFresh(e.target.checked)} className="accent-[#4DB8FF]" />
+                Force fresh research
+              </label>
+              <button
+                type="button"
+                disabled={runDisabled}
+                onClick={() => void runAnalysis()}
+                className={`rounded-lg border px-4 py-2 font-mono text-xs ${
+                  runDisabled
+                    ? 'border-[rgba(255,255,255,0.08)] bg-[#1A1A24] text-[#505068]'
+                    : 'border-[#4DB8FF] bg-[rgba(77,184,255,0.12)] text-[#79CBFF] hover:bg-[rgba(77,184,255,0.18)]'
+                }`}
+              >
+                {analysisPhase === 'running' ? 'Running analysis...' : 'Run analysis'}
+              </button>
+            </div>
             {analysisMessage ? (
               <div className="max-w-[360px] text-right">
                 <p

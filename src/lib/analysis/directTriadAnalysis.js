@@ -218,6 +218,8 @@ async function readAnthropicSseStream(res) {
   let stopReason = null
   /** @type {Record<string, unknown>|null} */
   let usage = null
+  /** @type {Set<string>} */
+  const seenEventTypes = new Set()
 
   /** @param {string} line */
   const consumeSseLine = (line) => {
@@ -226,14 +228,21 @@ async function readAnthropicSseStream(res) {
     if (!data || data === '[DONE]') return
     try {
       const event = JSON.parse(data)
-      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      const etype = event.type ?? 'unknown'
+      if (!seenEventTypes.has(etype)) {
+        seenEventTypes.add(etype)
+        console.log('[direct-triad] SSE event type:', etype)
+      }
+      if (etype === 'content_block_delta' && event.delta?.type === 'text_delta') {
         fullText += event.delta.text
-      } else if (event.type === 'message_delta') {
+      } else if (etype === 'message_delta') {
         if (event.delta?.stop_reason) stopReason = event.delta.stop_reason
         if (event.usage) usage = event.usage
-      } else if (event.type === 'error') {
+      } else if (etype === 'error') {
         const msg = event.error?.message ?? JSON.stringify(event.error ?? event)
         throw new Error(`Claude stream error: ${msg}`)
+      } else if (etype !== 'message_start' && etype !== 'content_block_start' && etype !== 'content_block_stop' && etype !== 'message_stop' && etype !== 'ping') {
+        console.log('[direct-triad] SSE unknown event:', etype, JSON.stringify(event).slice(0, 200))
       }
     } catch (e) {
       if (e instanceof Error && e.message.startsWith('Claude stream error:')) throw e
@@ -258,6 +267,8 @@ async function readAnthropicSseStream(res) {
       consumeSseLine(line)
     }
   }
+
+  console.log('[direct-triad] SSE stream done. fullText length:', fullText.length)
 
   return { fullText, stopReason, usage }
 }
@@ -917,6 +928,7 @@ async function runGenerateThesis(supabase, userId, target, progress) {
  *   positionId?: string,
  *   step?: 'suggest-framework' | 'run-analysis' | 'generate-thesis',
  *   confirmedFrameworkKey?: string,
+ *   forceFreshResearch?: boolean,
  *   onProgress?: (message: string) => void,
  * }} args
  */
@@ -940,6 +952,15 @@ export async function runDirectTriadAnalysis(supabase, args) {
 
     if (step === 'generate-thesis') {
       return runGenerateThesis(supabase, userId, target, progress)
+    }
+
+    if (args.forceFreshResearch) {
+      console.log('[direct-triad] force fresh research: cache cleared for', target.tickerTag)
+      await supabase
+        .from('research_logs')
+        .delete()
+        .eq('user_id', userId)
+        .eq('ticker', target.tickerTag)
     }
 
     const { geminiJson, researchLogId } = await obtainGeminiJson(
