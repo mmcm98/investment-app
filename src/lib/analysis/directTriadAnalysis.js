@@ -1,6 +1,6 @@
 import { buildClaudeResearchPaperPrompt, buildClaudeScorecardPrompt, buildGeminiDeepResearchPrompt } from './triadPrompts.js'
 
-const GEMINI_MODEL = 'gemini-2.5-pro'
+const GEMINI_MODEL = 'gemini-3.1-pro-preview'
 const CLAUDE_MODEL = 'claude-sonnet-4-6'
 const MAX_OUTPUT_TOKENS = 32000
 
