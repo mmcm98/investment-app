@@ -15,30 +15,10 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/__proxy_sharesight/, ''),
       },
-      '/api/anthropic-proxy': {
-        target: 'http://127.0.0.1:8791',
+      '/api': {
+        target: 'http://localhost:3001',
         changeOrigin: true,
-        rewrite: () => '/anthropic-proxy',
-      },
-      '/api/market/batch': {
-        target: 'http://127.0.0.1:8790',
-        changeOrigin: true,
-        rewrite: () => '/market/batch',
-      },
-      '/api/analysis/triad': {
-        target: 'http://127.0.0.1:8791',
-        changeOrigin: true,
-        rewrite: () => '/analysis/triad',
-      },
-      '/api/analysis/watchlist-flash': {
-        target: 'http://127.0.0.1:8791',
-        changeOrigin: true,
-        rewrite: () => '/analysis/watchlist-flash',
-      },
-      '/api/analysis/portfolio-briefing': {
-        target: 'http://127.0.0.1:8791',
-        changeOrigin: true,
-        rewrite: () => '/analysis/portfolio-briefing',
+        timeout: 0,
       },
     },
   },
